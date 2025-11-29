@@ -4,7 +4,11 @@ const socketIo = require('socket.io');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const User = require('./models/User');
+const Meeting = require('./models/Meeting');
+const AIService = require('./services/aiService');
 const { authenticate } = require('./middleware/auth');
+
+require('dotenv').config(); // ADD THIS
 
 const app = express();
 const server = http.createServer(app);
@@ -22,8 +26,10 @@ const io = socketIo(server, {
   }
 });
 
-// Initialize user database
+// Initialize services
 User.init();
+Meeting.init();
+const aiService = new AIService(process.env.AI_API_KEY);
 
 // Enhanced user storage for online users
 const onlineUsers = new Map(); // socketId -> user data
@@ -160,6 +166,98 @@ app.put('/api/users/:id', authenticate, async (req, res) => {
     res.json(userWithoutPassword);
   } catch (error) {
     res.status(400).json({ error: error.message });
+  }
+});
+
+// AI Matching Endpoint
+app.post('/api/match-users', authenticate, async (req, res) => {
+  try {
+    const allUsers = await User.findAll();
+    const otherUsers = allUsers.filter(u => u.id !== req.user.id);
+    
+    const matches = await aiService.analyzeProfilesAndMatch(req.user, otherUsers);
+    res.json(matches.matches || matches);
+  } catch (error) {
+    console.error('Matching error:', error);
+    res.status(500).json({ error: 'Matching failed' });
+  }
+});
+
+// Auto-message Endpoint
+app.post('/api/send-icebreaker', authenticate, async (req, res) => {
+  try {
+    const { toUserId } = req.body;
+    const targetUser = await User.findById(toUserId);
+    
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const icebreaker = await aiService.generateIcebreaker(req.user, targetUser);
+    
+    // Send the message via socket
+    const receiverEntry = Array.from(onlineUsers.entries())
+      .find(([_, user]) => user.id === toUserId);
+    
+    if (receiverEntry) {
+      const [receiverSocketId, receiver] = receiverEntry;
+      
+      const privateMessage = {
+        id: Date.now().toString(),
+        from: { id: req.user.id, username: req.user.username },
+        to: { id: receiver.id, username: receiver.username },
+        content: icebreaker,
+        timestamp: new Date(),
+        type: 'private',
+        isIcebreaker: true
+      };
+
+      // Store in private conversations
+      const conversationId = [req.user.id, toUserId].sort().join('_');
+      if (!privateConversations.has(conversationId)) {
+        privateConversations.set(conversationId, []);
+      }
+      privateConversations.get(conversationId).push(privateMessage);
+
+      // Send to receiver and sender
+      io.to(receiverSocketId).emit('privateMessage', privateMessage);
+      
+      // Also send back to sender
+      const senderSocketId = Array.from(onlineUsers.entries())
+        .find(([_, user]) => user.id === req.user.id)?.[0];
+      if (senderSocketId) {
+        io.to(senderSocketId).emit('privateMessage', privateMessage);
+      }
+    }
+    
+    res.json({ success: true, message: icebreaker });
+  } catch (error) {
+    console.error('Icebreaker error:', error);
+    res.status(500).json({ error: 'Failed to send icebreaker' });
+  }
+});
+
+// Meeting Endpoints
+app.post('/api/meetings', authenticate, async (req, res) => {
+  try {
+    const meeting = await Meeting.create({
+      ...req.body,
+      host: { id: req.user.id, username: req.user.username, bio: req.user.bio }
+    });
+    res.json(meeting);
+  } catch (error) {
+    console.error('Create meeting error:', error);
+    res.status(500).json({ error: 'Failed to create meeting' });
+  }
+});
+
+app.get('/api/meetings', async (req, res) => {
+  try {
+    const meetings = await Meeting.findAll();
+    res.json(meetings);
+  } catch (error) {
+    console.error('Get meetings error:', error);
+    res.status(500).json({ error: 'Failed to get meetings' });
   }
 });
 
@@ -317,6 +415,53 @@ io.on('connection', (socket) => {
       });
     } catch (error) {
       console.error('Error in getConversationHistory:', error);
+    }
+  });
+
+  // Socket Events for Meetings - MOVED INSIDE CONNECTION
+  socket.on('joinMeeting', async (data) => {
+    try {
+      const user = getUserBySocketId(socket.id);
+      if (!user) {
+        socket.emit('error', { message: 'Not authenticated' });
+        return;
+      }
+
+      const meeting = await Meeting.addParticipant(data.meetingId, user);
+      if (meeting) {
+        // Join meeting room
+        socket.join(`meeting_${data.meetingId}`);
+        
+        // Notify others in meeting
+        socket.to(`meeting_${data.meetingId}`).emit('userJoinedMeeting', {
+          user,
+          meeting
+        });
+
+        console.log(`${user.username} joined meeting: ${meeting.title}`);
+      }
+    } catch (error) {
+      console.error('Join meeting error:', error);
+      socket.emit('error', { message: 'Failed to join meeting' });
+    }
+  });
+
+  socket.on('meetingMessage', (data) => {
+    try {
+      const user = getUserBySocketId(socket.id);
+      if (!user) {
+        socket.emit('error', { message: 'Not authenticated' });
+        return;
+      }
+
+      // Broadcast to all in meeting room
+      io.to(`meeting_${data.meetingId}`).emit('newMeetingMessage', {
+        user: user,
+        message: data.message,
+        timestamp: new Date()
+      });
+    } catch (error) {
+      console.error('Meeting message error:', error);
     }
   });
 
