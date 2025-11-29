@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import io from 'socket.io-client'
+import axios from 'axios'
 import { 
   Send, 
   Users, 
@@ -9,24 +10,224 @@ import {
   Paperclip,
   Mic,
   MessageCircle,
-  X
+  X,
+  User,
+  Edit3,
+  Save,
+  XCircle
 } from 'lucide-react'
 import './App.css'
 
+const LoginRegister = ({ onLogin, onSwitchMode }) => {
+  const [isLogin, setIsLogin] = useState(true)
+  const [formData, setFormData] = useState({
+    username: '',
+    email: '',
+    password: '',
+    bio: ''
+  })
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setError('')
+    setLoading(true)
+
+    try {
+      const endpoint = isLogin ? '/api/login' : '/api/register'
+      const response = await axios.post(`http://localhost:5000${endpoint}`, formData)
+      onLogin(response.data)
+    } catch (error) {
+      setError(error.response?.data?.error || 'Something went wrong')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const switchMode = () => {
+    setIsLogin(!isLogin)
+    setError('')
+    setFormData({
+      username: '',
+      email: '',
+      password: '',
+      bio: ''
+    })
+  }
+
+  return (
+    <div className="auth-container">
+      <div className="auth-card">
+        <h2>{isLogin ? 'Login' : 'Register'}</h2>
+        {error && <div className="error-message">{error}</div>}
+        
+        <form onSubmit={handleSubmit}>
+          {!isLogin && (
+            <div className="form-group">
+              <label>Username</label>
+              <input
+                type="text"
+                value={formData.username}
+                onChange={(e) => setFormData({...formData, username: e.target.value})}
+                required
+                minLength={3}
+              />
+            </div>
+          )}
+          
+          <div className="form-group">
+            <label>Email</label>
+            <input
+              type="email"
+              value={formData.email}
+              onChange={(e) => setFormData({...formData, email: e.target.value})}
+              required
+            />
+          </div>
+          
+          <div className="form-group">
+            <label>Password</label>
+            <input
+              type="password"
+              value={formData.password}
+              onChange={(e) => setFormData({...formData, password: e.target.value})}
+              required
+              minLength={6}
+            />
+          </div>
+
+          {!isLogin && (
+            <div className="form-group">
+              <label>Bio (optional, max 400 characters)</label>
+              <textarea
+                value={formData.bio}
+                onChange={(e) => setFormData({...formData, bio: e.target.value})}
+                maxLength={400}
+                rows={3}
+                placeholder="Tell us something about yourself..."
+              />
+              <div className="char-count">{formData.bio.length}/400</div>
+            </div>
+          )}
+
+          <button type="submit" disabled={loading} className="auth-button">
+            {loading ? 'Loading...' : (isLogin ? 'Login' : 'Register')}
+          </button>
+        </form>
+
+        <div className="auth-switch">
+          {isLogin ? "Don't have an account? " : "Already have an account? "}
+          <button type="button" onClick={switchMode} className="switch-button">
+            {isLogin ? 'Register' : 'Login'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const ProfileModal = ({ user, onClose, onUpdate }) => {
+  const [isEditing, setIsEditing] = useState(false)
+  const [formData, setFormData] = useState({
+    username: user.username,
+    bio: user.bio || ''
+  })
+  const [loading, setLoading] = useState(false)
+
+  const handleSave = async () => {
+    setLoading(true)
+    try {
+      const response = await axios.put(`http://localhost:5000/api/users/${user.id}`, formData)
+      onUpdate(response.data)
+      setIsEditing(false)
+    } catch (error) {
+      alert(error.response?.data?.error || 'Failed to update profile')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="modal-overlay">
+      <div className="profile-modal">
+        <div className="modal-header">
+          <h3>Profile</h3>
+          <button onClick={onClose} className="close-button">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="profile-content">
+          <div className="profile-avatar">
+            {user.username?.charAt(0).toUpperCase()}
+          </div>
+
+          {isEditing ? (
+            <div className="edit-form">
+              <div className="form-group">
+                <label>Username</label>
+                <input
+                  type="text"
+                  value={formData.username}
+                  onChange={(e) => setFormData({...formData, username: e.target.value})}
+                />
+              </div>
+              <div className="form-group">
+                <label>Bio</label>
+                <textarea
+                  value={formData.bio}
+                  onChange={(e) => setFormData({...formData, bio: e.target.value})}
+                  maxLength={400}
+                  rows={4}
+                  placeholder="Tell us something about yourself..."
+                />
+                <div className="char-count">{formData.bio.length}/400</div>
+              </div>
+              <div className="modal-actions">
+                <button onClick={() => setIsEditing(false)} className="cancel-button">
+                  Cancel
+                </button>
+                <button onClick={handleSave} disabled={loading} className="save-button">
+                  {loading ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="profile-info">
+              <h4>{user.username}</h4>
+              <p className="user-email">{user.email}</p>
+              {user.bio ? (
+                <p className="user-bio">{user.bio}</p>
+              ) : (
+                <p className="no-bio">No bio yet</p>
+              )}
+              <button 
+                onClick={() => setIsEditing(true)} 
+                className="edit-profile-button"
+              >
+                <Edit3 size={16} />
+                Edit Profile
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 const App = () => {
   const [socket, setSocket] = useState(null)
+  const [user, setUser] = useState(null)
   const [messages, setMessages] = useState([])
   const [messageInput, setMessageInput] = useState('')
-  const [user, setUser] = useState(null)
   const [users, setUsers] = useState([])
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
-  
-  // Private messaging states
   const [privateMessages, setPrivateMessages] = useState([])
   const [activePrivateChat, setActivePrivateChat] = useState(null)
   const [privateMessageInput, setPrivateMessageInput] = useState('')
-  const [isTyping, setIsTyping] = useState(false)
-  const [typingUser, setTypingUser] = useState(null)
+  const [showProfile, setShowProfile] = useState(false)
 
   const messagesEndRef = useRef(null)
   const privateMessagesEndRef = useRef(null)
@@ -47,33 +248,24 @@ const App = () => {
     scrollPrivateToBottom()
   }, [privateMessages])
 
-  useEffect(() => {
-    const username = prompt('Enter your username:') || `User${Math.floor(Math.random() * 1000)}`
-    const newUser = { 
-      id: Date.now().toString(), 
-      username: username 
-    }
-    setUser(newUser)
-
+  const handleLogin = (userData) => {
+    setUser(userData)
     const newSocket = io('http://localhost:5000')
     setSocket(newSocket)
 
-    // Join with user object directly (not nested)
-    newSocket.emit('join', newUser)
+    // Authenticate with socket
+    newSocket.emit('authenticate', userData)
 
-    // Public message listeners
+    // Set up socket listeners
     newSocket.on('message', (message) => {
-      console.log('New message received:', message)
       setMessages(prev => [...prev, message])
     })
 
     newSocket.on('users', (usersList) => {
-      console.log('Users list updated:', usersList)
       setUsers(usersList)
     })
 
     newSocket.on('userJoined', (data) => {
-      console.log('User joined:', data)
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
         type: 'system',
@@ -83,7 +275,6 @@ const App = () => {
     })
 
     newSocket.on('userLeft', (data) => {
-      console.log('User left:', data)
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
         type: 'system',
@@ -93,18 +284,14 @@ const App = () => {
     })
 
     newSocket.on('previousMessages', (previousMessages) => {
-      console.log('Previous messages loaded:', previousMessages)
       setMessages(prev => [...prev, ...previousMessages])
     })
 
-    // Private message listeners
     newSocket.on('privateMessage', (message) => {
-      console.log('Private message received:', message)
       setPrivateMessages(prev => [...prev, message])
     })
 
     newSocket.on('conversationHistory', (data) => {
-      console.log('Conversation history received:', data)
       setPrivateMessages(data.messages || [])
     })
 
@@ -112,24 +299,29 @@ const App = () => {
       console.error('Socket error:', error)
       alert(`Error: ${error.message}`)
     })
+  }
 
-    return () => {
-      newSocket.close()
+  const handleLogout = () => {
+    if (socket) {
+      socket.close()
     }
-  }, [])
+    setUser(null)
+    setSocket(null)
+    setMessages([])
+    setUsers([])
+    setPrivateMessages([])
+    setActivePrivateChat(null)
+  }
 
   const sendMessage = (e) => {
     e.preventDefault()
     if (messageInput.trim() && socket && user) {
       const messageData = {
         id: Date.now().toString(),
-        user: user,
         content: messageInput.trim(),
-        timestamp: new Date(),
         type: 'user'
       }
       
-      console.log('Sending public message:', messageData)
       socket.emit('sendMessage', messageData)
       setMessageInput('')
     }
@@ -140,35 +332,36 @@ const App = () => {
     if (privateMessageInput.trim() && socket && user && activePrivateChat) {
       const messageData = {
         toUserId: activePrivateChat.id,
-        message: privateMessageInput.trim(),
-        user: user
+        message: privateMessageInput.trim()
       }
       
-      console.log('Sending private message:', messageData)
       socket.emit('sendPrivateMessage', messageData)
       setPrivateMessageInput('')
     }
   }
 
   const startPrivateChat = (otherUser) => {
-    console.log('Starting private chat with:', otherUser)
     setActivePrivateChat(otherUser)
     setPrivateMessages([])
     
-    // Load conversation history
     if (socket && user) {
-      const requestData = {
-        otherUserId: otherUser.id,
-        currentUser: user
-      }
-      console.log('Requesting conversation history:', requestData)
-      socket.emit('getConversationHistory', requestData)
+      socket.emit('getConversationHistory', {
+        otherUserId: otherUser.id
+      })
     }
   }
 
   const closePrivateChat = () => {
     setActivePrivateChat(null)
     setPrivateMessages([])
+  }
+
+  const handleProfileUpdate = (updatedUser) => {
+    setUser(updatedUser)
+    // Update user in online users list if needed
+    setUsers(prev => prev.map(u => 
+      u.id === updatedUser.id ? { ...u, username: updatedUser.username, bio: updatedUser.bio } : u
+    ))
   }
 
   const formatTime = (timestamp) => {
@@ -178,11 +371,14 @@ const App = () => {
     })
   }
 
-  // Filter private messages for active chat
   const currentPrivateMessages = privateMessages.filter(msg => 
     (msg.from.id === user?.id && msg.to.id === activePrivateChat?.id) ||
     (msg.from.id === activePrivateChat?.id && msg.to.id === user?.id)
   )
+
+  if (!user) {
+    return <LoginRegister onLogin={handleLogin} />
+  }
 
   return (
     <div className="app">
@@ -206,6 +402,22 @@ const App = () => {
             <span className="username">{user?.username}</span>
             <span className="status">Online</span>
           </div>
+          <div className="user-actions">
+            <button 
+              className="profile-button"
+              onClick={() => setShowProfile(true)}
+              title="Profile"
+            >
+              <User size={16} />
+            </button>
+            <button 
+              className="logout-button"
+              onClick={handleLogout}
+              title="Logout"
+            >
+              <LogOut size={16} />
+            </button>
+          </div>
         </div>
 
         <div className="online-users">
@@ -221,7 +433,10 @@ const App = () => {
                 <div className="user-avatar small">
                   {u.username?.charAt(0).toUpperCase()}
                 </div>
-                <span>{u.username}</span>
+                <div className="user-details">
+                  <span className="username">{u.username}</span>
+                  {u.bio && <span className="user-bio-preview">{u.bio}</span>}
+                </div>
                 <div className="user-actions">
                   <button 
                     className="private-chat-btn"
@@ -240,7 +455,6 @@ const App = () => {
 
       {/* Main Chat Area */}
       <div className="main-content">
-        {/* Header */}
         <div className="chat-header">
           <button 
             className="menu-toggle"
@@ -252,12 +466,11 @@ const App = () => {
             <h1>General Chat</h1>
             <span>{users.length} users online</span>
           </div>
-          <button className="logout-btn">
-            <LogOut size={20} />
+          <button className="profile-header-button" onClick={() => setShowProfile(true)}>
+            <User size={20} />
           </button>
         </div>
 
-        {/* Messages */}
         <div className="messages-container">
           <div className="messages">
             {messages.length === 0 ? (
@@ -303,16 +516,7 @@ const App = () => {
           </div>
         </div>
 
-        {/* Message Input */}
         <form className="message-input-container" onSubmit={sendMessage}>
-          <div className="input-actions">
-            <button type="button" className="action-btn">
-              <Paperclip size={20} />
-            </button>
-            <button type="button" className="action-btn">
-              <Smile size={20} />
-            </button>
-          </div>
           <input
             type="text"
             value={messageInput}
@@ -320,14 +524,9 @@ const App = () => {
             placeholder="Type a message..."
             className="message-input"
           />
-          <div className="send-actions">
-            <button type="button" className="action-btn">
-              <Mic size={20} />
-            </button>
-            <button type="submit" className="send-btn">
-              <Send size={20} />
-            </button>
-          </div>
+          <button type="submit" className="send-btn">
+            <Send size={20} />
+          </button>
         </form>
       </div>
 
@@ -339,12 +538,12 @@ const App = () => {
               <div className="user-avatar small">
                 {activePrivateChat.username?.charAt(0).toUpperCase()}
               </div>
-              <span>{activePrivateChat.username}</span>
-              {isTyping && (
-                <div className="typing-indicator">
-                  <span>typing...</span>
-                </div>
-              )}
+              <div>
+                <span>{activePrivateChat.username}</span>
+                {activePrivateChat.bio && (
+                  <div className="user-bio-preview">{activePrivateChat.bio}</div>
+                )}
+              </div>
             </div>
             <button className="close-chat-btn" onClick={closePrivateChat}>
               <X size={18} />
@@ -389,6 +588,15 @@ const App = () => {
             </button>
           </form>
         </div>
+      )}
+
+      {/* Profile Modal */}
+      {showProfile && (
+        <ProfileModal 
+          user={user} 
+          onClose={() => setShowProfile(false)}
+          onUpdate={handleProfileUpdate}
+        />
       )}
     </div>
   )

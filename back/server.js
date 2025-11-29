@@ -1,308 +1,380 @@
-const express = require('express')
-const http = require('http')
-const socketIo = require('socket.io')
-const cors = require('cors')
+const express = require('express');
+const http = require('http');
+const socketIo = require('socket.io');
+const cors = require('cors');
+const bcrypt = require('bcryptjs');
+const User = require('./models/User');
+const { authenticate } = require('./middleware/auth');
 
-const app = express()
-const server = http.createServer(app)
+const app = express();
+const server = http.createServer(app);
 
 app.use(cors({
   origin: "http://localhost:3000",
-  methods: ["GET", "POST"]
-}))
+  methods: ["GET", "POST", "PUT"]
+}));
+app.use(express.json());
 
 const io = socketIo(server, {
   cors: {
     origin: "http://localhost:3000",
     methods: ["GET", "POST"]
   }
-})
+});
 
-// Enhanced user storage
+// Initialize user database
+User.init();
+
+// Enhanced user storage for online users
+const onlineUsers = new Map(); // socketId -> user data
 const chatRooms = {
   general: {
-    users: [],
     messages: []
   }
-}
+};
 
-// Store private conversations
-const privateConversations = new Map()
+const privateConversations = new Map();
 
-const getUserById = (userId, room = 'general') => {
-  return chatRooms[room].users.find(user => user.id === userId)
-}
+// Utility functions
+const getOnlineUsers = () => {
+  return Array.from(onlineUsers.values()).map(user => ({
+    id: user.id,
+    username: user.username,
+    bio: user.bio,
+    socketId: user.socketId
+  }));
+};
 
 const getUserBySocketId = (socketId) => {
-  for (const roomName in chatRooms) {
-    const user = chatRooms[roomName].users.find(u => u.socketId === socketId)
-    if (user) return { user, room: roomName }
-  }
-  return null
-}
+  return onlineUsers.get(socketId);
+};
 
-const getUsersInRoom = (room = 'general') => {
-  return chatRooms[room].users.map(user => ({ 
-    id: user.id, 
-    username: user.username,
-    socketId: user.socketId
-  }))
-}
-
-// Generate conversation ID for private messages
 const getConversationId = (user1Id, user2Id) => {
-  return [user1Id, user2Id].sort().join('_')
-}
+  return [user1Id, user2Id].sort().join('_');
+};
 
+// Authentication routes
+app.post('/api/register', async (req, res) => {
+  try {
+    const { username, email, password, bio = '' } = req.body;
+
+    if (!username || !email || !password) {
+      return res.status(400).json({ error: 'Username, email, and password are required' });
+    }
+
+    if (bio.length > 400) {
+      return res.status(400).json({ error: 'Bio must be under 400 characters' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 12);
+    
+    const user = await User.create({
+      username,
+      email,
+      password: hashedPassword,
+      bio
+    });
+
+    // Remove password from response
+    const { password: _, ...userWithoutPassword } = user;
+    res.status(201).json(userWithoutPassword);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
+
+    const user = await User.findByEmail(email);
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Remove password from response
+    const { password: _, ...userWithoutPassword } = user;
+    res.json(userWithoutPassword);
+  } catch (error) {
+    res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+// User profile routes
+app.get('/api/users/:id', async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Remove password from response
+    const { password, ...userWithoutPassword } = user;
+    res.json(userWithoutPassword);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get user' });
+  }
+});
+
+app.put('/api/users/:id', authenticate, async (req, res) => {
+  try {
+    if (req.user.id !== req.params.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const { bio, username } = req.body;
+
+    if (bio && bio.length > 400) {
+      return res.status(400).json({ error: 'Bio must be under 400 characters' });
+    }
+
+    const updates = {};
+    if (bio !== undefined) updates.bio = bio;
+    if (username !== undefined) updates.username = username;
+
+    const updatedUser = await User.update(req.params.id, updates);
+
+    // Update online user if they're connected
+    const onlineUserEntry = Array.from(onlineUsers.entries())
+      .find(([_, user]) => user.id === req.params.id);
+    
+    if (onlineUserEntry) {
+      const [socketId, userData] = onlineUserEntry;
+      onlineUsers.set(socketId, { ...userData, ...updates });
+      
+      // Notify all clients about user update
+      io.emit('users', getOnlineUsers());
+    }
+
+    // Remove password from response
+    const { password, ...userWithoutPassword } = updatedUser;
+    res.json(userWithoutPassword);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Socket.io connection handling
 io.on('connection', (socket) => {
-  console.log('User connected:', socket.id)
+  console.log('User connected:', socket.id);
 
-  // FIXED: Accept user object directly, not nested
-  socket.on('join', (user) => {
+  socket.on('authenticate', async (userData) => {
     try {
-      console.log('Join event received:', user)
-      
-      if (!user || !user.id || !user.username) {
-        console.error('Invalid user data received:', user)
-        socket.emit('error', { message: 'Invalid user data' })
-        return
-      }
-      
-      const room = 'general'
-      
-      socket.join(room)
-      
-      // Check if user already exists
-      const existingUserIndex = chatRooms[room].users.findIndex(u => u.id === user.id)
-      if (existingUserIndex !== -1) {
-        // Update socketId if user reconnects
-        chatRooms[room].users[existingUserIndex].socketId = socket.id
-      } else {
-        // Add new user
-        chatRooms[room].users.push({ 
-          ...user, 
-          socketId: socket.id,
-          room: room
-        })
+      const user = await User.findById(userData.id);
+      if (!user) {
+        socket.emit('error', { message: 'User not found' });
+        return;
       }
 
-      // Send current users list to all clients
-      const usersList = getUsersInRoom(room)
-      io.to(room).emit('users', usersList)
+      // Add user to online users
+      onlineUsers.set(socket.id, {
+        id: user.id,
+        username: user.username,
+        bio: user.bio,
+        socketId: socket.id
+      });
+
+      socket.join('general');
+
+      // Send current online users to all clients
+      io.emit('users', getOnlineUsers());
 
       // Send previous messages to the new user
-      const previousMessages = chatRooms[room].messages.slice(-50)
-      socket.emit('previousMessages', previousMessages)
+      const previousMessages = chatRooms.general.messages.slice(-50);
+      socket.emit('previousMessages', previousMessages);
 
       // Notify all clients about new user
-      socket.to(room).emit('userJoined', {
+      socket.broadcast.emit('userJoined', {
         user: { id: user.id, username: user.username },
         message: `${user.username} joined the chat`,
         timestamp: new Date()
-      })
+      });
 
-      console.log(`${user.username} joined room: ${room}`)
-      console.log(`Total users online: ${chatRooms[room].users.length}`)
-      console.log('Users list:', usersList.map(u => u.username))
+      console.log(`${user.username} authenticated and joined chat`);
+      console.log(`Total users online: ${onlineUsers.size}`);
     } catch (error) {
-      console.error('Error in join event:', error)
-      socket.emit('error', { message: 'Join failed' })
+      console.error('Authentication error:', error);
+      socket.emit('error', { message: 'Authentication failed' });
     }
-  })
+  });
 
   // Handle public message sending
   socket.on('sendMessage', (messageData) => {
     try {
-      console.log('Public message received:', messageData)
-      
-      if (!messageData.user || !messageData.user.id) {
-        console.error('Invalid message data:', messageData)
-        return
+      const user = getUserBySocketId(socket.id);
+      if (!user) {
+        socket.emit('error', { message: 'Not authenticated' });
+        return;
       }
 
-      const user = getUserById(messageData.user.id)
-      const room = user?.room || 'general'
-      
+      const message = {
+        ...messageData,
+        user: {
+          id: user.id,
+          username: user.username
+        },
+        timestamp: new Date()
+      };
+
       // Add message to room
-      chatRooms[room].messages.push(messageData)
+      chatRooms.general.messages.push(message);
       
       // Keep only last 100 messages
-      if (chatRooms[room].messages.length > 100) {
-        chatRooms[room].messages = chatRooms[room].messages.slice(-100)
+      if (chatRooms.general.messages.length > 100) {
+        chatRooms.general.messages = chatRooms.general.messages.slice(-100);
       }
       
-      // Broadcast to all clients in the room
-      io.to(room).emit('message', messageData)
+      // Broadcast to all clients
+      io.emit('message', message);
       
-      console.log(`Public message broadcasted from ${messageData.user.username}: ${messageData.content}`)
+      console.log(`Public message from ${user.username}: ${message.content}`);
     } catch (error) {
-      console.error('Error in sendMessage:', error)
+      console.error('Error in sendMessage:', error);
     }
-  })
+  });
 
   // Handle PRIVATE message sending
   socket.on('sendPrivateMessage', (data) => {
     try {
-      console.log('Private message data received:', data)
-      
-      if (!data || !data.user || !data.user.id) {
-        console.error('Invalid private message data:', data)
-        socket.emit('error', { message: 'Invalid message data' })
-        return
+      const sender = getUserBySocketId(socket.id);
+      if (!sender) {
+        socket.emit('error', { message: 'Not authenticated' });
+        return;
       }
 
-      const { toUserId, message, user } = data
+      const { toUserId, message } = data;
       
-      if (!toUserId || !message) {
-        console.error('Missing required fields:', { toUserId, message })
-        socket.emit('error', { message: 'Missing required fields' })
-        return
-      }
-
       // Find receiver
-      const allUsers = getUsersInRoom()
-      const receiver = allUsers.find(u => u.id === toUserId)
+      const receiverEntry = Array.from(onlineUsers.entries())
+        .find(([_, user]) => user.id === toUserId);
       
-      console.log('Looking for receiver:', toUserId)
-      console.log('Available users:', allUsers)
-      
-      if (!receiver) {
-        console.error('Receiver not found')
-        socket.emit('error', { message: 'User not found or offline' })
-        return
+      if (!receiverEntry) {
+        socket.emit('error', { message: 'User not found or offline' });
+        return;
       }
+
+      const [receiverSocketId, receiver] = receiverEntry;
 
       const privateMessage = {
         id: Date.now().toString(),
-        from: user,
+        from: { id: sender.id, username: sender.username },
         to: { id: receiver.id, username: receiver.username },
         content: message,
         timestamp: new Date(),
         type: 'private'
-      }
+      };
 
       // Store private message
-      const conversationId = getConversationId(user.id, toUserId)
+      const conversationId = getConversationId(sender.id, toUserId);
       if (!privateConversations.has(conversationId)) {
-        privateConversations.set(conversationId, [])
+        privateConversations.set(conversationId, []);
       }
-      privateConversations.get(conversationId).push(privateMessage)
+      privateConversations.get(conversationId).push(privateMessage);
 
       // Keep only last 50 messages per conversation
       if (privateConversations.get(conversationId).length > 50) {
-        privateConversations.get(conversationId).shift()
+        privateConversations.get(conversationId).shift();
       }
 
       // Send to receiver
-      io.to(receiver.socketId).emit('privateMessage', privateMessage)
+      io.to(receiverSocketId).emit('privateMessage', privateMessage);
       
-      // Also send back to sender (for their own UI)
-      socket.emit('privateMessage', privateMessage)
+      // Also send back to sender
+      socket.emit('privateMessage', privateMessage);
 
-      console.log(`Private message sent from ${user.username} to ${receiver.username}: ${message}`)
+      console.log(`Private message from ${sender.username} to ${receiver.username}: ${message}`);
     } catch (error) {
-      console.error('Error in sendPrivateMessage:', error)
-      socket.emit('error', { message: 'Failed to send private message' })
+      console.error('Error in sendPrivateMessage:', error);
+      socket.emit('error', { message: 'Failed to send private message' });
     }
-  })
+  });
 
   // Get conversation history
   socket.on('getConversationHistory', (data) => {
     try {
-      console.log('Getting conversation history:', data)
-      
-      if (!data || !data.otherUserId || !data.currentUser) {
-        console.error('Invalid conversation history request:', data)
-        return
+      const user = getUserBySocketId(socket.id);
+      if (!user) {
+        socket.emit('error', { message: 'Not authenticated' });
+        return;
       }
 
-      const { otherUserId, currentUser } = data
-      const conversationId = getConversationId(currentUser.id, otherUserId)
+      const { otherUserId } = data;
+      const conversationId = getConversationId(user.id, otherUserId);
       
-      const history = privateConversations.get(conversationId) || []
+      const history = privateConversations.get(conversationId) || [];
       socket.emit('conversationHistory', {
         otherUserId,
         messages: history
-      })
-      
-      console.log(`Sent ${history.length} messages for conversation ${conversationId}`)
+      });
     } catch (error) {
-      console.error('Error in getConversationHistory:', error)
+      console.error('Error in getConversationHistory:', error);
     }
-  })
+  });
 
   socket.on('disconnect', () => {
     try {
-      let disconnectedUser = null
-      let userRoom = 'general'
+      const user = getUserBySocketId(socket.id);
       
-      for (const roomName in chatRooms) {
-        const userIndex = chatRooms[roomName].users.findIndex(user => user.socketId === socket.id)
-        if (userIndex !== -1) {
-          disconnectedUser = chatRooms[roomName].users[userIndex]
-          chatRooms[roomName].users.splice(userIndex, 1)
-          userRoom = roomName
-          break
-        }
-      }
-      
-      if (disconnectedUser) {
+      if (user) {
+        onlineUsers.delete(socket.id);
+        
         // Update users list for all clients
-        io.to(userRoom).emit('users', getUsersInRoom(userRoom))
+        io.emit('users', getOnlineUsers());
         
         // Notify all clients about user leaving
-        socket.to(userRoom).emit('userLeft', {
-          user: { id: disconnectedUser.id, username: disconnectedUser.username },
-          message: `${disconnectedUser.username} left the chat`,
+        io.emit('userLeft', {
+          user: { id: user.id, username: user.username },
+          message: `${user.username} left the chat`,
           timestamp: new Date()
-        })
+        });
         
-        console.log(`${disconnectedUser.username} left room: ${userRoom}`)
-        console.log(`Remaining users: ${chatRooms[userRoom].users.length}`)
+        console.log(`${user.username} left the chat`);
+        console.log(`Remaining users online: ${onlineUsers.size}`);
       }
       
-      console.log('User disconnected:', socket.id)
+      console.log('User disconnected:', socket.id);
     } catch (error) {
-      console.error('Error in disconnect:', error)
+      console.error('Error in disconnect:', error);
     }
-  })
-
-  // Handle client errors
-  socket.on('error', (error) => {
-    console.error('Client error:', error)
-  })
-})
+  });
+});
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
-  const stats = {}
-  
-  for (const roomName in chatRooms) {
-    stats[roomName] = {
-      users: chatRooms[roomName].users.length,
-      messages: chatRooms[roomName].messages.length
-    }
-  }
-  
   res.json({ 
     status: 'OK', 
-    rooms: stats,
+    onlineUsers: onlineUsers.size,
     privateConversations: privateConversations.size,
-    totalConnections: io.engine.clientsCount,
     timestamp: new Date().toISOString()
-  })
-})
+  });
+});
 
-// Get all connected users
-app.get('/api/users', (req, res) => {
-  const allUsers = getUsersInRoom('general')
-  res.json(allUsers)
-})
+// Get all users (for search)
+app.get('/api/users', async (req, res) => {
+  try {
+    const users = await User.findAll();
+    const usersWithoutPasswords = users.map(user => {
+      const { password, ...userWithoutPassword } = user;
+      return userWithoutPassword;
+    });
+    res.json(usersWithoutPasswords);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get users' });
+  }
+});
 
-const PORT = process.env.PORT || 5000
+const PORT = process.env.PORT || 5000;
 
 server.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`)
-  console.log(`📊 Health check: http://localhost:${PORT}/api/health`)
-  console.log(`👥 Users endpoint: http://localhost:${PORT}/api/users`)
-})
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
+});
