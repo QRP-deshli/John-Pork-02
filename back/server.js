@@ -169,6 +169,20 @@ app.put('/api/users/:id', authenticate, async (req, res) => {
   }
 });
 
+app.put('/api/users/:id/profile-picture', async (req, res) => {
+  try {
+    const { profilePicture } = req.body;
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { profilePicture },
+      { new: true }
+    );
+    res.json(user);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update profile picture' });
+  }
+});
+
 // AI Matching Endpoint
 app.post('/api/match-users', authenticate, async (req, res) => {
   try {

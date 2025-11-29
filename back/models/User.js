@@ -15,7 +15,7 @@ class User {
         await fs.access(usersFilePath);
       } catch (error) {
         // Create file with empty array if it doesn't exist
-        await fs.writeFile(usersFilePath, JSON.stringify([]));
+        await this.safeWrite([]);
         console.log('Created users.json file');
       }
     } catch (error) {
@@ -24,32 +24,49 @@ class User {
     }
   }
 
-  static async findAll() {
+  // Add file locking and better error handling
+  static async safeWrite(data) {
+    try {
+      // For now, use basic file writing since proper-lockfile might need installation
+      // If you want proper locking, install: npm install proper-lockfile
+      await fs.writeFile(usersFilePath, JSON.stringify(data, null, 2));
+    } catch (error) {
+      console.error('Error writing to users file:', error);
+      throw error;
+    }
+  }
+
+  static async safeRead() {
     try {
       const data = await fs.readFile(usersFilePath, 'utf8');
       return JSON.parse(data);
     } catch (error) {
+      console.error('Error reading users file:', error);
       return [];
     }
   }
 
+  static async findAll() {
+    return await this.safeRead();
+  }
+
   static async findById(id) {
-    const users = await this.findAll();
+    const users = await this.safeRead();
     return users.find(user => user.id === id);
   }
 
   static async findByUsername(username) {
-    const users = await this.findAll();
+    const users = await this.safeRead();
     return users.find(user => user.username === username);
   }
 
   static async findByEmail(email) {
-    const users = await this.findAll();
+    const users = await this.safeRead();
     return users.find(user => user.email === email);
   }
 
   static async create(userData) {
-    const users = await this.findAll();
+    const users = await this.safeRead();
     
     // Check if user already exists
     if (users.find(u => u.username === userData.username)) {
@@ -67,13 +84,13 @@ class User {
     };
 
     users.push(newUser);
-    await fs.writeFile(usersFilePath, JSON.stringify(users, null, 2));
+    await this.safeWrite(users);
     
     return newUser;
   }
 
   static async update(id, updates) {
-    const users = await this.findAll();
+    const users = await this.safeRead();
     const userIndex = users.findIndex(u => u.id === id);
     
     if (userIndex === -1) {
@@ -86,19 +103,19 @@ class User {
       updatedAt: new Date().toISOString()
     };
 
-    await fs.writeFile(usersFilePath, JSON.stringify(users, null, 2));
+    await this.safeWrite(users);
     return users[userIndex];
   }
 
   static async delete(id) {
-    const users = await this.findAll();
+    const users = await this.safeRead();
     const filteredUsers = users.filter(u => u.id !== id);
     
     if (filteredUsers.length === users.length) {
       throw new Error('User not found');
     }
 
-    await fs.writeFile(usersFilePath, JSON.stringify(filteredUsers, null, 2));
+    await this.safeWrite(filteredUsers);
     return true;
   }
 }
