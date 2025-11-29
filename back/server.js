@@ -3,26 +3,62 @@ const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const User = require('./models/User');
 const Meeting = require('./models/Meeting');
 const AIService = require('./services/aiService');
 const { authenticate } = require('./middleware/auth');
 
-require('dotenv').config(); // ADD THIS
+require('dotenv').config();
 
 const app = express();
 const server = http.createServer(app);
 
+// CORS configuration
 app.use(cors({
   origin: "http://localhost:3000",
-  methods: ["GET", "POST", "PUT"]
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  credentials: true
 }));
 app.use(express.json());
+
+// Serve uploaded files statically
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 const io = socketIo(server, {
   cors: {
     origin: "http://localhost:3000",
     methods: ["GET", "POST"]
+  }
+});
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const uploadDir = path.join(__dirname, 'uploads/profile-pictures');
+    fs.mkdirSync(uploadDir, { recursive: true });
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const fileExtension = path.extname(file.originalname);
+    cb(null, 'user-' + (req.user?.id || 'unknown') + '-' + uniqueSuffix + fileExtension);
+  }
+});
+
+const upload = multer({ 
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB limit
+  },
+  fileFilter: function (req, file, cb) {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed!'), false);
+    }
   }
 });
 
@@ -47,6 +83,7 @@ const getOnlineUsers = () => {
     id: user.id,
     username: user.username,
     bio: user.bio,
+    profilePicture: user.profilePicture,
     socketId: user.socketId
   }));
 };
@@ -83,7 +120,12 @@ app.post('/api/register', async (req, res) => {
 
     // Remove password from response
     const { password: _, ...userWithoutPassword } = user;
-    res.status(201).json(userWithoutPassword);
+    
+    // Return user data with token
+    res.status(201).json({
+      user: userWithoutPassword,
+      token: 'dummy-token-' + Date.now() // Simple token for now
+    });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -109,7 +151,12 @@ app.post('/api/login', async (req, res) => {
 
     // Remove password from response
     const { password: _, ...userWithoutPassword } = user;
-    res.json(userWithoutPassword);
+    
+    // Return user data with token
+    res.json({
+      user: userWithoutPassword,
+      token: 'dummy-token-' + Date.now() // Simple token for now
+    });
   } catch (error) {
     res.status(500).json({ error: 'Login failed' });
   }
@@ -131,6 +178,7 @@ app.get('/api/users/:id', async (req, res) => {
   }
 });
 
+// Update user profile
 app.put('/api/users/:id', authenticate, async (req, res) => {
   try {
     if (req.user.id !== req.params.id) {
@@ -169,17 +217,68 @@ app.put('/api/users/:id', authenticate, async (req, res) => {
   }
 });
 
-app.put('/api/users/:id/profile-picture', async (req, res) => {
+// Profile picture upload endpoint
+app.post('/api/upload-profile-picture', authenticate, upload.single('profilePicture'), async (req, res) => {
   try {
-    const { profilePicture } = req.body;
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
-      { profilePicture },
-      { new: true }
-    );
-    res.json(user);
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    // Update user in database with new profile picture path
+    const updatedUser = await User.update(req.user.id, {
+      profilePicture: req.file.filename
+    });
+
+    // Update online user if they're connected
+    const onlineUserEntry = Array.from(onlineUsers.entries())
+      .find(([_, user]) => user.id === req.user.id);
+    
+    if (onlineUserEntry) {
+      const [socketId, userData] = onlineUserEntry;
+      onlineUsers.set(socketId, { ...userData, profilePicture: req.file.filename });
+      io.emit('users', getOnlineUsers());
+    }
+
+    // Remove password from response
+    const { password, ...userWithoutPassword } = updatedUser;
+
+    res.json({ 
+      message: 'Profile picture updated successfully',
+      user: userWithoutPassword
+    });
   } catch (error) {
+    console.error('Error uploading profile picture:', error);
     res.status(500).json({ error: 'Failed to update profile picture' });
+  }
+});
+
+// Remove profile picture
+app.delete('/api/profile-picture', authenticate, async (req, res) => {
+  try {
+    const updatedUser = await User.update(req.user.id, {
+      profilePicture: null
+    });
+
+    // Update online user if they're connected
+    const onlineUserEntry = Array.from(onlineUsers.entries())
+      .find(([_, user]) => user.id === req.user.id);
+    
+    if (onlineUserEntry) {
+      const [socketId, userData] = onlineUserEntry;
+      onlineUsers.set(socketId, { ...userData, profilePicture: null });
+      io.emit('users', getOnlineUsers());
+    }
+
+    // Remove password from response
+    const { password, ...userWithoutPassword } = updatedUser;
+
+    res.json({ 
+      message: 'Profile picture removed successfully',
+      user: userWithoutPassword
+    });
+  } catch (error) {
+    console.error('Error removing profile picture:', error);
+    res.status(500).json({ error: 'Failed to remove profile picture' });
   }
 });
 
@@ -218,8 +317,16 @@ app.post('/api/send-icebreaker', authenticate, async (req, res) => {
       
       const privateMessage = {
         id: Date.now().toString(),
-        from: { id: req.user.id, username: req.user.username },
-        to: { id: receiver.id, username: receiver.username },
+        from: { 
+          id: req.user.id, 
+          username: req.user.username,
+          profilePicture: req.user.profilePicture
+        },
+        to: { 
+          id: receiver.id, 
+          username: receiver.username,
+          profilePicture: receiver.profilePicture
+        },
         content: icebreaker,
         timestamp: new Date(),
         type: 'private',
@@ -227,11 +334,16 @@ app.post('/api/send-icebreaker', authenticate, async (req, res) => {
       };
 
       // Store in private conversations
-      const conversationId = [req.user.id, toUserId].sort().join('_');
+      const conversationId = getConversationId(req.user.id, toUserId);
       if (!privateConversations.has(conversationId)) {
         privateConversations.set(conversationId, []);
       }
       privateConversations.get(conversationId).push(privateMessage);
+
+      // Keep only last 50 messages per conversation
+      if (privateConversations.get(conversationId).length > 50) {
+        privateConversations.get(conversationId).shift();
+      }
 
       // Send to receiver and sender
       io.to(receiverSocketId).emit('privateMessage', privateMessage);
@@ -256,8 +368,17 @@ app.post('/api/meetings', authenticate, async (req, res) => {
   try {
     const meeting = await Meeting.create({
       ...req.body,
-      host: { id: req.user.id, username: req.user.username, bio: req.user.bio }
+      host: { 
+        id: req.user.id, 
+        username: req.user.username, 
+        bio: req.user.bio,
+        profilePicture: req.user.profilePicture
+      }
     });
+    
+    // Notify all clients about new meeting
+    io.emit('meetingCreated', meeting);
+    
     res.json(meeting);
   } catch (error) {
     console.error('Create meeting error:', error);
@@ -275,12 +396,37 @@ app.get('/api/meetings', async (req, res) => {
   }
 });
 
+// Get all users (for search)
+app.get('/api/users', async (req, res) => {
+  try {
+    const users = await User.findAll();
+    const usersWithoutPasswords = users.map(user => {
+      const { password, ...userWithoutPassword } = user;
+      return userWithoutPassword;
+    });
+    res.json(usersWithoutPasswords);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get users' });
+  }
+});
+
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    onlineUsers: onlineUsers.size,
+    privateConversations: privateConversations.size,
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Socket.io connection handling
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
-  socket.on('authenticate', async (userData) => {
+  socket.on('authenticate', async (data) => {
     try {
+      const userData = data.user || data;
       const user = await User.findById(userData.id);
       if (!user) {
         socket.emit('error', { message: 'User not found' });
@@ -292,6 +438,7 @@ io.on('connection', (socket) => {
         id: user.id,
         username: user.username,
         bio: user.bio,
+        profilePicture: user.profilePicture,
         socketId: socket.id
       });
 
@@ -306,7 +453,11 @@ io.on('connection', (socket) => {
 
       // Notify all clients about new user
       socket.broadcast.emit('userJoined', {
-        user: { id: user.id, username: user.username },
+        user: { 
+          id: user.id, 
+          username: user.username,
+          profilePicture: user.profilePicture
+        },
         message: `${user.username} joined the chat`,
         timestamp: new Date()
       });
@@ -330,9 +481,12 @@ io.on('connection', (socket) => {
 
       const message = {
         ...messageData,
+        userId: user.id,
+        username: user.username,
         user: {
           id: user.id,
-          username: user.username
+          username: user.username,
+          profilePicture: user.profilePicture
         },
         timestamp: new Date()
       };
@@ -378,8 +532,16 @@ io.on('connection', (socket) => {
 
       const privateMessage = {
         id: Date.now().toString(),
-        from: { id: sender.id, username: sender.username },
-        to: { id: receiver.id, username: receiver.username },
+        from: { 
+          id: sender.id, 
+          username: sender.username,
+          profilePicture: sender.profilePicture
+        },
+        to: { 
+          id: receiver.id, 
+          username: receiver.username,
+          profilePicture: receiver.profilePicture
+        },
         content: message,
         timestamp: new Date(),
         type: 'private'
@@ -432,7 +594,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Socket Events for Meetings - MOVED INSIDE CONNECTION
+  // Socket Events for Meetings
   socket.on('joinMeeting', async (data) => {
     try {
       const user = getUserBySocketId(socket.id);
@@ -479,6 +641,72 @@ io.on('connection', (socket) => {
     }
   });
 
+  // In server.js - update the socket authentication handler
+socket.on('authenticate', async (data) => {
+  try {
+    console.log('🔍 Socket authenticate received:', data);
+    
+    // Handle different data structures
+    let userData;
+    if (data.user && data.user.id) {
+      userData = data.user;
+    } else if (data.id) {
+      userData = data;
+    } else {
+      console.error('❌ Invalid authentication data structure:', data);
+      socket.emit('error', { message: 'Invalid authentication data' });
+      return;
+    }
+
+    console.log('🔍 Looking for user with ID:', userData.id);
+    const user = await User.findById(userData.id);
+    
+    if (!user) {
+      console.error('❌ User not found with ID:', userData.id);
+      console.log('❌ Available users:', await User.findAll().then(users => users.map(u => ({ id: u.id, username: u.username }))));
+      socket.emit('error', { message: 'User not found' });
+      return;
+    }
+
+    console.log('✅ User found:', user.username);
+
+    // Add user to online users
+    onlineUsers.set(socket.id, {
+      id: user.id,
+      username: user.username,
+      bio: user.bio,
+      profilePicture: user.profilePicture,
+      socketId: socket.id
+    });
+
+    socket.join('general');
+
+    // Send current online users to all clients
+    io.emit('users', getOnlineUsers());
+
+    // Send previous messages to the new user
+    const previousMessages = chatRooms.general.messages.slice(-50);
+    socket.emit('previousMessages', previousMessages);
+
+    // Notify all clients about new user
+    socket.broadcast.emit('userJoined', {
+      user: { 
+        id: user.id, 
+        username: user.username,
+        profilePicture: user.profilePicture
+      },
+      message: `${user.username} joined the chat`,
+      timestamp: new Date()
+    });
+
+    console.log(`✅ ${user.username} authenticated and joined chat`);
+    console.log(`👥 Total users online: ${onlineUsers.size}`);
+  } catch (error) {
+    console.error('❌ Authentication error:', error);
+    socket.emit('error', { message: 'Authentication failed: ' + error.message });
+  }
+});
+
   socket.on('disconnect', () => {
     try {
       const user = getUserBySocketId(socket.id);
@@ -491,7 +719,11 @@ io.on('connection', (socket) => {
         
         // Notify all clients about user leaving
         io.emit('userLeft', {
-          user: { id: user.id, username: user.username },
+          user: { 
+            id: user.id, 
+            username: user.username,
+            profilePicture: user.profilePicture
+          },
           message: `${user.username} left the chat`,
           timestamp: new Date()
         });
@@ -507,33 +739,10 @@ io.on('connection', (socket) => {
   });
 });
 
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    onlineUsers: onlineUsers.size,
-    privateConversations: privateConversations.size,
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Get all users (for search)
-app.get('/api/users', async (req, res) => {
-  try {
-    const users = await User.findAll();
-    const usersWithoutPasswords = users.map(user => {
-      const { password, ...userWithoutPassword } = user;
-      return userWithoutPassword;
-    });
-    res.json(usersWithoutPasswords);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to get users' });
-  }
-});
-
 const PORT = process.env.PORT || 5000;
 
 server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
+  console.log(`📁 Uploads directory: ${path.join(__dirname, 'uploads')}`);
 });

@@ -4,7 +4,11 @@ import axios from 'axios';
 const Meetings = ({ user, socket }) => {
   const [meetings, setMeetings] = useState([]);
   const [showCreate, setShowCreate] = useState(false);
-  const [newMeeting, setNewMeeting] = useState({ title: '', description: '' });
+  const [newMeeting, setNewMeeting] = useState({ 
+    title: '', 
+    description: '',
+    scheduledTime: ''
+  });
 
   useEffect(() => {
     loadMeetings();
@@ -22,10 +26,13 @@ const Meetings = ({ user, socket }) => {
   const createMeeting = async (e) => {
     e.preventDefault();
     try {
-      await axios.post('http://localhost:5000/api/meetings', newMeeting, {
+      await axios.post('http://localhost:5000/api/meetings', {
+        ...newMeeting,
+        scheduledTime: newMeeting.scheduledTime || new Date().toISOString()
+      }, {
         headers: { 'user-id': user.id }
       });
-      setNewMeeting({ title: '', description: '' });
+      setNewMeeting({ title: '', description: '', scheduledTime: '' });
       setShowCreate(false);
       loadMeetings();
     } catch (error) {
@@ -36,6 +43,10 @@ const Meetings = ({ user, socket }) => {
   const joinMeeting = (meetingId) => {
     socket.emit('joinMeeting', { meetingId });
     alert(`Joined meeting! Check browser console for meeting room messages.`);
+  };
+
+  const formatTime = (timestamp) => {
+    return new Date(timestamp).toLocaleString();
   };
 
   return (
@@ -93,6 +104,18 @@ const Meetings = ({ user, socket }) => {
               minHeight: '80px'
             }}
           />
+          <input
+            type="datetime-local"
+            value={newMeeting.scheduledTime}
+            onChange={(e) => setNewMeeting({...newMeeting, scheduledTime: e.target.value})}
+            style={{
+              width: '100%',
+              padding: '8px',
+              marginBottom: '12px',
+              border: '1px solid #e2e8f0',
+              borderRadius: '4px'
+            }}
+          />
           <button type="submit" style={{
             background: '#48bb78',
             color: 'white',
@@ -117,8 +140,9 @@ const Meetings = ({ user, socket }) => {
           }}>
             <h4>{meeting.title}</h4>
             <p>{meeting.description}</p>
-            <p>Host: {meeting.host?.username}</p>
-            <p>Participants: {meeting.participants?.length || 0}</p>
+            <p><strong>Host:</strong> {meeting.host?.username}</p>
+            <p><strong>Time:</strong> {formatTime(meeting.scheduledTime || meeting.createdAt)}</p>
+            <p><strong>Participants:</strong> {meeting.participants?.length || 0}</p>
             <button onClick={() => joinMeeting(meeting.id)} style={{
               background: '#667eea',
               color: 'white',

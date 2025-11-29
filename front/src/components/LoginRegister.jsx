@@ -6,27 +6,30 @@ const LoginRegister = ({ onLogin }) => {
   const [formData, setFormData] = useState({
     username: '',
     email: '',
-    password: '',
+    password: '', 
     bio: ''
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
+// In your LoginRegister component handleSubmit function
+const handleSubmit = async (e) => {
+  e.preventDefault();
+  setError('');
+  setLoading(true);
 
-    try {
-      const endpoint = isLogin ? '/api/login' : '/api/register';
-      const response = await axios.post(`http://localhost:5000${endpoint}`, formData);
-      onLogin(response.data);
-    } catch (error) {
-      setError(error.response?.data?.error || 'Something went wrong');
-    } finally {
-      setLoading(false);
-    }
-  };
+  try {
+    const endpoint = isLogin ? '/api/login' : '/api/register';
+    const response = await axios.post(`http://localhost:5000${endpoint}`, formData);
+    
+    // Make sure your backend returns { user, token } structure
+    onLogin(response.data); // This should include user data AND token
+  } catch (error) {
+    setError(error.response?.data?.error || 'Something went wrong');
+  } finally {
+    setLoading(false);
+  }
+};
 
   const switchMode = () => {
     setIsLogin(!isLogin);

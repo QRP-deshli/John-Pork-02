@@ -36,20 +36,21 @@ class Meeting {
   static async findAll() {
     return await this.safeRead();
   }
-
-  static async create(meetingData) {
-    const meetings = await this.safeRead();
-    const newMeeting = {
-      id: Date.now().toString(),
-      ...meetingData,
-      participants: [],
-      createdAt: new Date().toISOString()
-    };
-    
-    meetings.push(newMeeting);
-    await this.safeWrite(meetings);
-    return newMeeting;
-  }
+// Update the create method in Meeting.js
+static async create(meetingData) {
+  const meetings = await this.safeRead();
+  const newMeeting = {
+    id: Date.now().toString(),
+    ...meetingData,
+    participants: [],
+    createdAt: new Date().toISOString(),
+    scheduledTime: meetingData.scheduledTime || new Date().toISOString()
+  };
+  
+  meetings.push(newMeeting);
+  await this.safeWrite(meetings);
+  return newMeeting;
+}
 
   static async addParticipant(meetingId, user) {
     const meetings = await this.safeRead();

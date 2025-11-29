@@ -1,104 +1,150 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { X, Edit3, Paperclip, XCircle } from 'lucide-react';
 
 const ProfileModal = ({ user, onClose, onUpdate }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState({
-    username: user.username,
+    username: user.username || '',
     bio: user.bio || '',
-    profilePicture: user.profilePicture || ''
+    email: user.email || ''
   });
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const [uploading, setUploading] = useState(false);
-  const fileInputRef = useRef(null);
 
-  const handleSave = async () => {
+  useEffect(() => {
+    setFormData({
+      username: user.username || '',
+      bio: user.bio || '',
+      email: user.email || ''
+    });
+  }, [user]);
+
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem('token');
+    return {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    };
+  };
+
+  const getAuthHeadersFormData = () => {
+    const token = localStorage.getItem('token');
+    return {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'multipart/form-data'
+    };
+  };
+
+  const handleSave = async (e) => {
+    e.preventDefault();
     setLoading(true);
+    setError('');
+
     try {
-      const response = await axios.put(`http://localhost:5000/api/users/${user.id}`, {
-        username: formData.username,
-        bio: formData.bio
-      });
-      onUpdate(response.data);
+      const response = await axios.put(
+        'http://localhost:5000/api/profile',
+        formData,
+        {
+          headers: getAuthHeaders()
+        }
+      );
+
+      onUpdate(response.data.user);
       setIsEditing(false);
     } catch (error) {
-      alert(error.response?.data?.error || 'Failed to update profile');
+      console.error('Profile update error:', error);
+      setError(error.response?.data?.error || 'Failed to update profile');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleProfilePictureUpdate = async (pictureData) => {
+  const handleFileUpload = async (file) => {
     setUploading(true);
+    setError('');
+
     try {
-      const response = await axios.put(`http://localhost:5000/api/users/${user.id}/profile-picture`, {
-        profilePicture: pictureData
-      });
-      onUpdate(response.data);
-      setFormData(prev => ({ ...prev, profilePicture: pictureData }));
+      console.log('Uploading file:', file.name, file.size, file.type);
+      
+      const formData = new FormData();
+      formData.append('profilePicture', file);
+      
+      const response = await axios.post(
+        'http://localhost:5000/api/upload-profile-picture', 
+        formData, 
+        {
+          headers: getAuthHeadersFormData()
+        }
+      );
+      
+      console.log('Upload successful:', response.data);
+      
+      // Update user with new profile picture
+      onUpdate(response.data.user);
+      return response.data;
     } catch (error) {
-      alert('Failed to update profile picture');
+      console.error('Upload error details:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status
+      });
+      throw new Error(error.response?.data?.error || 'Failed to upload profile picture');
     } finally {
       setUploading(false);
     }
   };
 
-  const handleFileUpload = async (event) => {
-    const file = event.target.files[0];
+  const handlePictureChange = async (e) => {
+    const file = e.target.files[0];
     if (!file) return;
 
+    // Validate file type and size
     if (!file.type.startsWith('image/')) {
-      alert('Please select an image file');
+      setError('Please select an image file');
       return;
     }
 
     if (file.size > 5 * 1024 * 1024) {
-      alert('File size must be less than 5MB');
+      setError('File size must be less than 5MB');
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      handleProfilePictureUpdate(e.target.result);
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleAvatarClick = () => {
-    if (isEditing) {
-      fileInputRef.current?.click();
+    try {
+      await handleFileUpload(file);
+    } catch (error) {
+      setError(error.message);
     }
   };
 
-  const getAvatarContent = () => {
-    if (user.profilePicture) {
-      return (
-        <img 
-          src={user.profilePicture} 
-          alt="Profile" 
-          className="profile-picture"
-        />
+  const handleRemovePicture = async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      const response = await axios.delete(
+        'http://localhost:5000/api/profile-picture',
+        {
+          headers: getAuthHeaders()
+        }
       );
+
+      onUpdate(response.data.user);
+    } catch (error) {
+      setError(error.response?.data?.error || 'Failed to remove profile picture');
+    } finally {
+      setLoading(false);
     }
-    return user.username?.charAt(0).toUpperCase();
   };
 
-  const getAvatarPreview = () => {
-    if (formData.profilePicture) {
-      return (
-        <img 
-          src={formData.profilePicture} 
-          alt="Profile Preview" 
-          className="profile-picture"
-        />
-      );
-    }
-    return formData.username?.charAt(0).toUpperCase();
-  };
-
-  const removeProfilePicture = () => {
-    handleProfilePictureUpdate('');
+  const handleCancel = () => {
+    setFormData({
+      username: user.username || '',
+      bio: user.bio || '',
+      email: user.email || ''
+    });
+    setIsEditing(false);
+    setError('');
   };
 
   return (
@@ -106,112 +152,144 @@ const ProfileModal = ({ user, onClose, onUpdate }) => {
       <div className="profile-modal">
         <div className="modal-header">
           <h3>Profile</h3>
-          <button onClick={onClose} className="close-button">
-            <X size={20} />
+          <button className="close-button" onClick={onClose}>
+            ×
           </button>
         </div>
 
         <div className="profile-content">
+          {error && <div className="error-message">{error}</div>}
+
+          {/* Profile Picture Section */}
+          <div className="profile-avatar editable">
+            {user.profilePicture ? (
+              <img 
+                src={`http://localhost:5000/uploads/profile-pictures/${user.profilePicture}`} 
+                alt="Profile" 
+                className="profile-picture"
+              />
+            ) : (
+              <div>{user.username?.charAt(0).toUpperCase()}</div>
+            )}
+            <div className="avatar-edit-overlay">
+              <span>Change</span>
+            </div>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handlePictureChange}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: '100%',
+                opacity: 0,
+                cursor: 'pointer'
+              }}
+            />
+          </div>
+
           {uploading && (
             <div className="upload-overlay">
               <div className="upload-spinner">Uploading...</div>
             </div>
           )}
 
-          <div 
-            className={`profile-avatar ${isEditing ? 'editable' : ''}`}
-            onClick={handleAvatarClick}
-            title={isEditing ? "Click to change profile picture" : ""}
-          >
-            {isEditing ? getAvatarPreview() : getAvatarContent()}
-            {isEditing && (
-              <div className="avatar-edit-overlay">
-                <Edit3 size={20} />
-              </div>
-            )}
+          <div className="picture-options">
+            <h4>Profile Picture</h4>
+            <div className="picture-buttons">
+              <button 
+                type="button" 
+                className="upload-button"
+                onClick={() => document.querySelector('input[type="file"]').click()}
+              >
+                📁 Upload New
+              </button>
+              {user.profilePicture && (
+                <button 
+                  type="button" 
+                  className="remove-button"
+                  onClick={handleRemovePicture}
+                  disabled={loading}
+                >
+                  🗑️ Remove
+                </button>
+              )}
+            </div>
+            <p className="picture-hint">Supported formats: JPG, PNG, GIF. Max size: 5MB</p>
           </div>
 
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={handleFileUpload}
-            accept="image/*"
-            style={{ display: 'none' }}
-          />
-
           {isEditing ? (
-            <div className="edit-form">
+            <form onSubmit={handleSave} className="edit-form">
               <div className="form-group">
                 <label>Username</label>
                 <input
                   type="text"
                   value={formData.username}
                   onChange={(e) => setFormData({...formData, username: e.target.value})}
+                  required
+                  minLength={3}
+                  maxLength={30}
                 />
               </div>
+
+              <div className="form-group">
+                <label>Email</label>
+                <input
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({...formData, email: e.target.value})}
+                  required
+                />
+              </div>
+
               <div className="form-group">
                 <label>Bio</label>
                 <textarea
                   value={formData.bio}
                   onChange={(e) => setFormData({...formData, bio: e.target.value})}
+                  placeholder="Tell us something about yourself..."
                   maxLength={400}
                   rows={4}
-                  placeholder="Tell us something about yourself..."
                 />
                 <div className="char-count">{formData.bio.length}/400</div>
               </div>
-              
-              <div className="picture-options">
-                <h4>Profile Picture</h4>
-                <div className="picture-buttons">
-                  <button 
-                    type="button" 
-                    className="upload-button"
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    <Paperclip size={16} />
-                    Upload Photo
-                  </button>
-                  {(user.profilePicture || formData.profilePicture) && (
-                    <button 
-                      type="button" 
-                      className="remove-button"
-                      onClick={removeProfilePicture}
-                    >
-                      <XCircle size={16} />
-                      Remove Photo
-                    </button>
-                  )}
-                </div>
-                <p className="picture-hint">
-                  Click on your profile picture or use the upload button to change it
-                </p>
-              </div>
 
               <div className="modal-actions">
-                <button onClick={() => setIsEditing(false)} className="cancel-button">
+                <button 
+                  type="button" 
+                  className="cancel-button"
+                  onClick={handleCancel}
+                  disabled={loading}
+                >
                   Cancel
                 </button>
-                <button onClick={handleSave} disabled={loading} className="save-button">
-                  {loading ? 'Saving...' : 'Save'}
+                <button 
+                  type="submit" 
+                  className="save-button"
+                  disabled={loading}
+                >
+                  {loading ? 'Saving...' : 'Save Changes'}
                 </button>
               </div>
-            </div>
+            </form>
           ) : (
             <div className="profile-info">
               <h4>{user.username}</h4>
-              <p className="user-email">{user.email}</p>
+              <div className="user-email">{user.email}</div>
+              
               {user.bio ? (
-                <p className="user-bio">{user.bio}</p>
+                <div className="user-bio">{user.bio}</div>
               ) : (
-                <p className="no-bio">No bio yet</p>
+                <div className="no-bio">No bio yet</div>
               )}
+
               <button 
-                onClick={() => setIsEditing(true)} 
                 className="edit-profile-button"
+                onClick={() => setIsEditing(true)}
               >
-                <Edit3 size={16} />
-                Edit Profile
+                ✏️ Edit Profile
               </button>
             </div>
           )}

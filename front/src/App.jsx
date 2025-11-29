@@ -22,6 +22,7 @@ const App = () => {
   const [privateMessageInput, setPrivateMessageInput] = useState('');
   const [showProfile, setShowProfile] = useState(false);
   const [activeTab, setActiveTab] = useState('chat');
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
 
   const messagesEndRef = useRef(null);
   const privateMessagesEndRef = useRef(null);
@@ -42,13 +43,46 @@ const App = () => {
     scrollPrivateToBottom();
   }, [privateMessages]);
 
-  const handleLogin = (userData) => {
-    setUser(userData);
-    const newSocket = io('http://localhost:5000');
+  // Check for existing token on app load
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    const userData = localStorage.getItem('user');
+    
+    if (token && userData) {
+      try {
+        const parsedUser = JSON.parse(userData);
+        setUser(parsedUser);
+        initializeSocketAndAuthenticate(parsedUser, token);
+      } catch (error) {
+        console.error('Error parsing stored user data:', error);
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+      }
+    }
+  }, []);
+
+  const initializeSocketAndAuthenticate = (userData, token) => {
+    setIsAuthenticating(true);
+    
+    const newSocket = io('http://localhost:5000', {
+      autoConnect: true,
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000
+    });
+
     setSocket(newSocket);
 
-    // Authenticate with socket
-    newSocket.emit('authenticate', userData);
+    // Wait for socket to connect before authenticating
+    newSocket.on('connect', () => {
+      console.log('✅ Socket connected, authenticating...');
+      
+      // Authenticate with socket - send proper structure
+      newSocket.emit('authenticate', { 
+        user: userData, 
+        token: token 
+      });
+    });
 
     // Set up socket listeners
     newSocket.on('message', (message) => {
@@ -57,6 +91,7 @@ const App = () => {
 
     newSocket.on('users', (usersList) => {
       setUsers(usersList);
+      setIsAuthenticating(false);
     });
 
     newSocket.on('userJoined', (data) => {
@@ -91,20 +126,72 @@ const App = () => {
 
     newSocket.on('error', (error) => {
       console.error('Socket error:', error);
-      alert(`Error: ${error.message}`);
+      setIsAuthenticating(false);
+      if (error.message === 'User not found') {
+        alert('Authentication failed. Please login again.');
+        handleLogout();
+      } else {
+        alert(`Error: ${error.message}`);
+      }
+    });
+
+    newSocket.on('connect_error', (error) => {
+      console.error('Socket connection error:', error);
+      setIsAuthenticating(false);
     });
   };
 
-  const handleLogout = () => {
-    if (socket) {
-      socket.close();
+  // FIXED: Handle the response structure properly
+  const handleLogin = async (responseData) => {
+    console.log('Login response:', responseData);
+    
+    // Extract user data from the response structure
+    let userData;
+    let token;
+    
+    if (responseData.user && responseData.token) {
+      // Structure: { user: {...}, token: '...' }
+      userData = responseData.user;
+      token = responseData.token;
+    } else {
+      // Fallback: assume the response is the user data directly
+      userData = responseData;
+      token = responseData.token;
     }
-    setUser(null);
+    
+    if (!userData || !userData.id) {
+      console.error('Invalid user data received:', responseData);
+      alert('Login failed: Invalid user data received');
+      return;
+    }
+
+    setUser(userData);
+    
+    // Store user data and token in localStorage
+    if (token) {
+      localStorage.setItem('token', token);
+    }
+    localStorage.setItem('user', JSON.stringify(userData));
+    
+    // Initialize socket and authenticate
+    initializeSocketAndAuthenticate(userData, token);
+  };
+
+  const handleLogout = () => {
+    // Clear localStorage
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    
+    if (socket) {
+      socket.disconnect();
+    }
     setSocket(null);
+    setUser(null);
     setMessages([]);
     setUsers([]);
     setPrivateMessages([]);
     setActivePrivateChat(null);
+    setIsAuthenticating(false);
   };
 
   const sendMessage = (e) => {
@@ -152,6 +239,9 @@ const App = () => {
 
   const handleProfileUpdate = (updatedUser) => {
     setUser(updatedUser);
+    // Update localStorage with new user data
+    localStorage.setItem('user', JSON.stringify(updatedUser));
+    
     // Update user in online users list if needed
     setUsers(prev => prev.map(u => 
       u.id === updatedUser.id ? { ...u, username: updatedUser.username, bio: updatedUser.bio } : u
@@ -208,6 +298,21 @@ const App = () => {
         );
     }
   };
+
+  // Show loading while authenticating
+  if (isAuthenticating) {
+    return (
+      <div className="auth-container">
+        <div className="auth-card">
+          <h2>Connecting...</h2>
+          <p>Please wait while we connect you to the chat.</p>
+          <div style={{ textAlign: 'center', marginTop: '20px' }}>
+            <div className="loading-spinner"></div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!user) {
     return <LoginRegister onLogin={handleLogin} />;

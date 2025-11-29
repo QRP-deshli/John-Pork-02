@@ -55,6 +55,25 @@ class User {
     return users.find(user => user.id === id);
   }
 
+  // Add this method to your User class in User.js
+static async findByIdAndUpdate(id, updates) {
+  const users = await this.safeRead();
+  const userIndex = users.findIndex(u => u.id === id);
+  
+  if (userIndex === -1) {
+    throw new Error('User not found');
+  }
+
+  users[userIndex] = {
+    ...users[userIndex],
+    ...updates,
+    updatedAt: new Date().toISOString()
+  };
+
+  await this.safeWrite(users);
+  return users[userIndex];
+}
+
   static async findByUsername(username) {
     const users = await this.safeRead();
     return users.find(user => user.username === username);

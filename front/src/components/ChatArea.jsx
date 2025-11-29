@@ -37,11 +37,19 @@ const ChatArea = ({
                   message.type === 'system' ? 'system' : 'other'
                 }`}
               >
-                {message.type !== 'system' && message.userId !== user?.id && (
-                  <div className="message-avatar">
-                    {message.username?.charAt(0).toUpperCase()}
-                  </div>
-                )}
+               
+{message.type !== 'system' && message.userId !== user?.id && (
+  <div className="message-avatar">
+    {message.user?.profilePicture ? (
+      <img 
+        src={`http://localhost:5000/uploads/profile-pictures/${message.user.profilePicture}`} 
+        alt={message.username}
+      />
+    ) : (
+      message.username?.charAt(0).toUpperCase()
+    )}
+  </div>
+)}
                 
                 <div className="message-content">
                   {message.type !== 'system' && message.userId !== user?.id && (
