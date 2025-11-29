@@ -61,121 +61,173 @@ const App = () => {
     }
   }, []);
 
-  const initializeSocketAndAuthenticate = (userData, token) => {
-    setIsAuthenticating(true);
+const initializeSocketAndAuthenticate = (userData, token) => {
+  setIsAuthenticating(true);
+  
+  // FIX: Check if socket already exists and disconnect it
+  if (socket) {
+    socket.disconnect();
+    setSocket(null);
+  }
+
+  const newSocket = io('http://localhost:5000', {
+    autoConnect: true,
+    reconnection: true,
+    reconnectionAttempts: 5,
+    reconnectionDelay: 1000
+  });
+
+  setSocket(newSocket);
+
+  // FIX: Use once() instead of on() for connect event to prevent multiple listeners
+  newSocket.once('connect', () => {
+    console.log('✅ Socket connected, authenticating...');
     
-    const newSocket = io('http://localhost:5000', {
-      autoConnect: true,
-      reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000
+    newSocket.emit('authenticate', { 
+      user: userData, 
+      token: token 
     });
+  });
 
-    setSocket(newSocket);
+  // FIX: Remove any existing message listeners before adding new ones
+  newSocket.off('message');
+  newSocket.off('users');
+  newSocket.off('userJoined');
+  newSocket.off('userLeft');
+  newSocket.off('previousMessages');
+  newSocket.off('privateMessage');
+  newSocket.off('conversationHistory');
+  newSocket.off('error');
+  newSocket.off('connect_error');
 
-    // Wait for socket to connect before authenticating
-    newSocket.on('connect', () => {
-      console.log('✅ Socket connected, authenticating...');
-      
-      // Authenticate with socket - send proper structure
-      newSocket.emit('authenticate', { 
-        user: userData, 
-        token: token 
-      });
+  // Set up socket listeners - ONLY ONCE
+  newSocket.on('message', (message) => {
+    console.log('📨 Received message:', message.content);
+    setMessages(prev => {
+      // FIX: Check if message already exists to prevent duplicates
+      const messageExists = prev.some(msg => msg.id === message.id);
+      if (messageExists) {
+        console.log('🔄 Skipping duplicate message');
+        return prev;
+      }
+      return [...prev, message];
     });
+  });
 
-    // Set up socket listeners
-    newSocket.on('message', (message) => {
-      setMessages(prev => [...prev, message]);
-    });
+  newSocket.on('users', (usersList) => {
+    setUsers(usersList);
+    setIsAuthenticating(false);
+  });
 
-    newSocket.on('users', (usersList) => {
-      setUsers(usersList);
-      setIsAuthenticating(false);
-    });
-
-    newSocket.on('userJoined', (data) => {
-      setMessages(prev => [...prev, {
-        id: Date.now().toString(),
+  newSocket.on('userJoined', (data) => {
+    setMessages(prev => {
+      const newMessage = {
+        id: `system-join-${Date.now()}-${Math.random()}`,
         type: 'system',
         content: `${data.user.username} joined the chat`,
         timestamp: new Date()
-      }]);
+      };
+      
+      const messageExists = prev.some(msg => msg.id === newMessage.id);
+      return messageExists ? prev : [...prev, newMessage];
     });
+  });
 
-    newSocket.on('userLeft', (data) => {
-      setMessages(prev => [...prev, {
-        id: Date.now().toString(),
+  newSocket.on('userLeft', (data) => {
+    setMessages(prev => {
+      const newMessage = {
+        id: `system-left-${Date.now()}-${Math.random()}`,
         type: 'system',
         content: `${data.user.username} left the chat`,
         timestamp: new Date()
-      }]);
+      };
+      
+      const messageExists = prev.some(msg => msg.id === newMessage.id);
+      return messageExists ? prev : [...prev, newMessage];
     });
+  });
 
-    newSocket.on('previousMessages', (previousMessages) => {
-      setMessages(prev => [...prev, ...previousMessages]);
+  newSocket.on('previousMessages', (previousMessages) => {
+    setMessages(prev => {
+      // Filter out duplicates when adding previous messages
+      const newMessages = previousMessages.filter(newMsg => 
+        !prev.some(existingMsg => existingMsg.id === newMsg.id)
+      );
+      return [...prev, ...newMessages];
     });
+  });
 
-    newSocket.on('privateMessage', (message) => {
-      setPrivateMessages(prev => [...prev, message]);
+  newSocket.on('privateMessage', (message) => {
+    setPrivateMessages(prev => {
+      const messageExists = prev.some(msg => msg.id === message.id);
+      return messageExists ? prev : [...prev, message];
     });
+  });
 
-    newSocket.on('conversationHistory', (data) => {
-      setPrivateMessages(data.messages || []);
-    });
+  newSocket.on('conversationHistory', (data) => {
+    setPrivateMessages(data.messages || []);
+  });
 
-    newSocket.on('error', (error) => {
-      console.error('Socket error:', error);
-      setIsAuthenticating(false);
-      if (error.message === 'User not found') {
-        alert('Authentication failed. Please login again.');
-        handleLogout();
-      } else {
-        alert(`Error: ${error.message}`);
+  newSocket.on('error', (error) => {
+    console.error('Socket error:', error);
+    setIsAuthenticating(false);
+    
+    if (error.message.includes('Authentication failed') || error.message.includes('User not found')) {
+      console.warn('Authentication issue:', error.message);
+      const storedUser = localStorage.getItem('user');
+      const storedToken = localStorage.getItem('token');
+      
+      if (storedUser && storedToken) {
+        setTimeout(() => {
+          newSocket.emit('authenticate', { 
+            user: JSON.parse(storedUser), 
+            token: storedToken 
+          });
+        }, 2000);
       }
-    });
+    } else {
+      alert(`Error: ${error.message}`);
+    }
+  });
 
-    newSocket.on('connect_error', (error) => {
-      console.error('Socket connection error:', error);
-      setIsAuthenticating(false);
-    });
-  };
+  newSocket.on('connect_error', (error) => {
+    console.error('Socket connection error:', error);
+    setIsAuthenticating(false);
+  });
+};
 
   // FIXED: Handle the response structure properly
-  const handleLogin = async (responseData) => {
-    console.log('Login response:', responseData);
-    
-    // Extract user data from the response structure
-    let userData;
-    let token;
-    
-    if (responseData.user && responseData.token) {
-      // Structure: { user: {...}, token: '...' }
-      userData = responseData.user;
-      token = responseData.token;
-    } else {
-      // Fallback: assume the response is the user data directly
-      userData = responseData;
-      token = responseData.token;
-    }
-    
-    if (!userData || !userData.id) {
-      console.error('Invalid user data received:', responseData);
-      alert('Login failed: Invalid user data received');
-      return;
-    }
+const handleLogin = async (responseData) => {
+  console.log('Login response:', responseData);
+  
+  let userData;
+  let token;
+  
+  if (responseData.user && responseData.token) {
+    userData = responseData.user;
+    token = responseData.token;
+  } else {
+    userData = responseData;
+    token = responseData.token;
+  }
+  
+  if (!userData || !userData.id) {
+    console.error('Invalid user data received:', responseData);
+    alert('Login failed: Invalid user data received');
+    return;
+  }
 
-    setUser(userData);
-    
-    // Store user data and token in localStorage
-    if (token) {
-      localStorage.setItem('token', token);
-    }
-    localStorage.setItem('user', JSON.stringify(userData));
-    
-    // Initialize socket and authenticate
-    initializeSocketAndAuthenticate(userData, token);
-  };
+  setUser(userData);
+  
+  // Store user data and token in localStorage
+  if (token) {
+    localStorage.setItem('token', token);
+  }
+  localStorage.setItem('user', JSON.stringify(userData));
+  
+  // Initialize socket and authenticate
+  initializeSocketAndAuthenticate(userData, token);
+};
 
   const handleLogout = () => {
     // Clear localStorage
@@ -194,19 +246,20 @@ const App = () => {
     setIsAuthenticating(false);
   };
 
-  const sendMessage = (e) => {
-    e.preventDefault();
-    if (messageInput.trim() && socket && user) {
-      const messageData = {
-        id: Date.now().toString(),
-        content: messageInput.trim(),
-        type: 'user'
-      };
-      
-      socket.emit('sendMessage', messageData);
-      setMessageInput('');
-    }
-  };
+const sendMessage = (e) => {
+  e.preventDefault();
+  if (messageInput.trim() && socket && user) {
+    const messageData = {
+      id: Date.now().toString() + '-' + Math.random().toString(36).substr(2, 9), // Ensure unique ID
+      content: messageInput.trim(),
+      type: 'user'
+    };
+    
+    console.log('📤 Sending message:', messageData.content);
+    socket.emit('sendMessage', messageData);
+    setMessageInput('');
+  }
+};
 
   const sendPrivateMessage = (e) => {
     e.preventDefault();

@@ -77,7 +77,14 @@ const Sidebar = ({
               </div>
               <div className="user-details">
                 <span className="username">{u.username}</span>
-                {u.bio && <span className="user-bio-preview">{u.bio}</span>}
+                {u.bio && (
+                  <span 
+                    className="user-bio-preview" 
+                    title={u.bio} // Show full bio on hover
+                  >
+                    {u.bio}
+                  </span>
+                )}
               </div>
               <div className="user-actions">
                 <button 

@@ -1,14 +1,16 @@
 const User = require('../models/User');
 
+// Store active sessions to prevent conflicts
+const activeSessions = new Map();
+
 const authenticate = async (req, res, next) => {
   try {
-    // Try to get user ID from Authorization header first (Bearer token)
     let userId;
+    let token;
     
     const authHeader = req.headers['authorization'];
     if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.substring(7);
-      // Extract user ID from token (format: "token-{userId}")
+      token = authHeader.substring(7);
       userId = token.replace('token-', '');
     }
     
@@ -37,6 +39,12 @@ const authenticate = async (req, res, next) => {
 
     console.log('✅ User authenticated:', user.username);
     req.user = user;
+    
+    // Track session
+    if (token) {
+      activeSessions.set(token, userId);
+    }
+    
     next();
   } catch (error) {
     console.error('Auth error:', error);
@@ -44,4 +52,9 @@ const authenticate = async (req, res, next) => {
   }
 };
 
-module.exports = { authenticate };
+// Add session cleanup
+const cleanupSession = (token) => {
+  activeSessions.delete(token);
+};
+
+module.exports = { authenticate, cleanupSession, activeSessions };

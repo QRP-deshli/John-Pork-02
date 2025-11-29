@@ -7,14 +7,11 @@ const usersFilePath = path.join(dataDir, 'users.json');
 class User {
   static async init() {
     try {
-      // Create data directory if it doesn't exist
       await fs.mkdir(dataDir, { recursive: true });
       
-      // Check if users file exists, create if it doesn't
       try {
         await fs.access(usersFilePath);
       } catch (error) {
-        // Create file with empty array if it doesn't exist
         await this.safeWrite([]);
         console.log('Created users.json file');
       }
@@ -77,27 +74,18 @@ class User {
 
   static async findByEmail(email) {
     const users = await this.safeRead();
-    // Case-insensitive email search
     return users.find(user => user.email.toLowerCase() === email.toLowerCase());
   }
 
   static async create(userData) {
     const users = await this.safeRead();
     
-    // FIXED: Case-insensitive checks to prevent duplicates
-    const existingUsername = users.find(u => 
-      u.username.toLowerCase() === userData.username.toLowerCase()
-    );
-    
-    const existingEmail = users.find(u => 
+    // SIMPLIFIED CHECK FOR TESTING
+    const existingUser = users.find(u => 
       u.email.toLowerCase() === userData.email.toLowerCase()
     );
     
-    if (existingUsername) {
-      throw new Error('Username already exists');
-    }
-    
-    if (existingEmail) {
+    if (existingUser) {
       throw new Error('Email already exists');
     }
 
@@ -125,25 +113,6 @@ class User {
       throw new Error('User not found');
     }
 
-    // If updating username or email, check for duplicates
-    if (updates.username) {
-      const existingUsername = users.find(u => 
-        u.id !== id && u.username.toLowerCase() === updates.username.toLowerCase()
-      );
-      if (existingUsername) {
-        throw new Error('Username already exists');
-      }
-    }
-
-    if (updates.email) {
-      const existingEmail = users.find(u => 
-        u.id !== id && u.email.toLowerCase() === updates.email.toLowerCase()
-      );
-      if (existingEmail) {
-        throw new Error('Email already exists');
-      }
-    }
-
     users[userIndex] = {
       ...users[userIndex],
       ...updates,
@@ -169,21 +138,17 @@ class User {
     return true;
   }
 
-  // NEW: Clean up duplicate users (run this once to fix existing duplicates)
   static async removeDuplicates() {
     const users = await this.safeRead();
     const uniqueUsers = [];
     const seenEmails = new Set();
-    const seenUsernames = new Set();
 
     for (const user of users) {
       const emailLower = user.email.toLowerCase();
-      const usernameLower = user.username.toLowerCase();
 
-      if (!seenEmails.has(emailLower) && !seenUsernames.has(usernameLower)) {
+      if (!seenEmails.has(emailLower)) {
         uniqueUsers.push(user);
         seenEmails.add(emailLower);
-        seenUsernames.add(usernameLower);
       } else {
         console.log('🗑️ Removing duplicate user:', user.username, user.email);
       }

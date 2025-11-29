@@ -1,4 +1,3 @@
-// ChatArea.js - Remove the tabs from this component
 import React from 'react';
 
 const ChatArea = ({
@@ -13,8 +12,6 @@ const ChatArea = ({
 }) => {
   return (
     <div className="main-content">
-      {/* REMOVE THE TABS FROM HERE - they're now in App.js */}
-      
       <div className="chat-header">
         <div className="chat-info">
           <h1>General Chat</h1>
@@ -31,25 +28,25 @@ const ChatArea = ({
           ) : (
             messages.map((message) => (
               <div
-                key={message.id}
+                key={message.id || `msg-${message.timestamp}-${Math.random().toString(36).substr(2, 9)}`}
                 className={`message ${
                   message.userId === user?.id ? 'own' : 
                   message.type === 'system' ? 'system' : 'other'
                 }`}
               >
                
-{message.type !== 'system' && message.userId !== user?.id && (
-  <div className="message-avatar">
-    {message.user?.profilePicture ? (
-      <img 
-        src={`http://localhost:5000/uploads/profile-pictures/${message.user.profilePicture}`} 
-        alt={message.username}
-      />
-    ) : (
-      message.username?.charAt(0).toUpperCase()
-    )}
-  </div>
-)}
+                {message.type !== 'system' && message.userId !== user?.id && (
+                  <div className="message-avatar">
+                    {message.user?.profilePicture ? (
+                      <img 
+                        src={`http://localhost:5000/uploads/profile-pictures/${message.user.profilePicture}`} 
+                        alt={message.username}
+                      />
+                    ) : (
+                      message.username?.charAt(0).toUpperCase()
+                    )}
+                  </div>
+                )}
                 
                 <div className="message-content">
                   {message.type !== 'system' && message.userId !== user?.id && (
