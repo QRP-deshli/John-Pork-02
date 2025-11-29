@@ -25,7 +25,10 @@ const Sidebar = ({
       <div className="current-user">
         <div className="user-avatar">
           {user?.profilePicture ? (
-            <img src={user.profilePicture} alt="Profile" />
+            <img 
+              src={`http://localhost:5000/uploads/profile-pictures/${user.profilePicture}`} 
+              alt={user.username}
+            />
           ) : (
             user?.username?.charAt(0).toUpperCase()
           )}
@@ -64,7 +67,10 @@ const Sidebar = ({
             <div key={u.id} className="user-item">
               <div className="user-avatar small">
                 {u.profilePicture ? (
-                  <img src={u.profilePicture} alt={u.username} />
+                  <img 
+                    src={`http://localhost:5000/uploads/profile-pictures/${u.profilePicture}`} 
+                    alt={u.username}
+                  />
                 ) : (
                   u.username?.charAt(0).toUpperCase()
                 )}

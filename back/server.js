@@ -67,8 +67,12 @@ User.init();
 Meeting.init();
 const aiService = new AIService(process.env.AI_API_KEY);
 
+// Import DailyMatchScheduler
+const DailyMatchScheduler = require('./services/dailyMatchScheduler');
+let dailyMatchScheduler = null;
+
 // Enhanced user storage for online users
-const onlineUsers = new Map(); // socketId -> user data
+const onlineUsers = new Map();
 const chatRooms = {
   general: {
     messages: []
@@ -118,13 +122,11 @@ app.post('/api/register', async (req, res) => {
       bio
     });
 
-    // Remove password from response
     const { password: _, ...userWithoutPassword } = user;
     
-    // Return user data with token
     res.status(201).json({
       user: userWithoutPassword,
-      token: 'dummy-token-' + Date.now() // Simple token for now
+      token: 'token-' + user.id
     });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -149,43 +151,30 @@ app.post('/api/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Remove password from response
     const { password: _, ...userWithoutPassword } = user;
     
-    // Return user data with token
     res.json({
       user: userWithoutPassword,
-      token: 'dummy-token-' + Date.now() // Simple token for now
+      token: 'token-' + user.id
     });
   } catch (error) {
     res.status(500).json({ error: 'Login failed' });
   }
 });
 
-// User profile routes
-app.get('/api/users/:id', async (req, res) => {
+// FIXED: Profile endpoints with proper authentication
+app.get('/api/profile', authenticate, async (req, res) => {
   try {
-    const user = await User.findById(req.params.id);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    // Remove password from response
-    const { password, ...userWithoutPassword } = user;
+    const { password, ...userWithoutPassword } = req.user;
     res.json(userWithoutPassword);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to get user' });
+    res.status(500).json({ error: 'Failed to get profile' });
   }
 });
 
-// Update user profile
-app.put('/api/users/:id', authenticate, async (req, res) => {
+app.put('/api/profile', authenticate, async (req, res) => {
   try {
-    if (req.user.id !== req.params.id) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
-
-    const { bio, username } = req.body;
+    const { bio, username, email } = req.body;
 
     if (bio && bio.length > 400) {
       return res.status(400).json({ error: 'Bio must be under 400 characters' });
@@ -194,37 +183,34 @@ app.put('/api/users/:id', authenticate, async (req, res) => {
     const updates = {};
     if (bio !== undefined) updates.bio = bio;
     if (username !== undefined) updates.username = username;
+    if (email !== undefined) updates.email = email;
 
-    const updatedUser = await User.update(req.params.id, updates);
+    const updatedUser = await User.update(req.user.id, updates);
 
     // Update online user if they're connected
     const onlineUserEntry = Array.from(onlineUsers.entries())
-      .find(([_, user]) => user.id === req.params.id);
+      .find(([_, user]) => user.id === req.user.id);
     
     if (onlineUserEntry) {
       const [socketId, userData] = onlineUserEntry;
       onlineUsers.set(socketId, { ...userData, ...updates });
-      
-      // Notify all clients about user update
       io.emit('users', getOnlineUsers());
     }
 
-    // Remove password from response
     const { password, ...userWithoutPassword } = updatedUser;
-    res.json(userWithoutPassword);
+    res.json({ user: userWithoutPassword });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
 });
 
-// Profile picture upload endpoint
+// FIXED: Profile picture upload with proper authentication
 app.post('/api/upload-profile-picture', authenticate, upload.single('profilePicture'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    // Update user in database with new profile picture path
     const updatedUser = await User.update(req.user.id, {
       profilePicture: req.file.filename
     });
@@ -239,7 +225,6 @@ app.post('/api/upload-profile-picture', authenticate, upload.single('profilePict
       io.emit('users', getOnlineUsers());
     }
 
-    // Remove password from response
     const { password, ...userWithoutPassword } = updatedUser;
 
     res.json({ 
@@ -269,7 +254,6 @@ app.delete('/api/profile-picture', authenticate, async (req, res) => {
       io.emit('users', getOnlineUsers());
     }
 
-    // Remove password from response
     const { password, ...userWithoutPassword } = updatedUser;
 
     res.json({ 
@@ -333,22 +317,18 @@ app.post('/api/send-icebreaker', authenticate, async (req, res) => {
         isIcebreaker: true
       };
 
-      // Store in private conversations
       const conversationId = getConversationId(req.user.id, toUserId);
       if (!privateConversations.has(conversationId)) {
         privateConversations.set(conversationId, []);
       }
       privateConversations.get(conversationId).push(privateMessage);
 
-      // Keep only last 50 messages per conversation
       if (privateConversations.get(conversationId).length > 50) {
         privateConversations.get(conversationId).shift();
       }
 
-      // Send to receiver and sender
       io.to(receiverSocketId).emit('privateMessage', privateMessage);
       
-      // Also send back to sender
       const senderSocketId = Array.from(onlineUsers.entries())
         .find(([_, user]) => user.id === req.user.id)?.[0];
       if (senderSocketId) {
@@ -376,7 +356,6 @@ app.post('/api/meetings', authenticate, async (req, res) => {
       }
     });
     
-    // Notify all clients about new meeting
     io.emit('meetingCreated', meeting);
     
     res.json(meeting);
@@ -396,7 +375,6 @@ app.get('/api/meetings', async (req, res) => {
   }
 });
 
-// Get all users (for search)
 app.get('/api/users', async (req, res) => {
   try {
     const users = await User.findAll();
@@ -410,30 +388,80 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
-// Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'OK', 
     onlineUsers: onlineUsers.size,
     privateConversations: privateConversations.size,
+    dailyMatcherActive: dailyMatchScheduler?.isRunning || false,
     timestamp: new Date().toISOString()
   });
 });
 
-// Socket.io connection handling
+// Manual trigger endpoint for daily matches (for testing)
+app.post('/api/trigger-daily-matches', authenticate, async (req, res) => {
+  try {
+    if (dailyMatchScheduler) {
+      await dailyMatchScheduler.triggerNow();
+      res.json({ success: true, message: 'Daily match messages triggered' });
+    } else {
+      res.status(500).json({ error: 'Daily match scheduler not initialized' });
+    }
+  } catch (error) {
+    console.error('Error triggering daily matches:', error);
+    res.status(500).json({ error: 'Failed to trigger daily matches' });
+  }
+});
+
+// Cleanup duplicate users endpoint
+app.post('/api/cleanup-duplicates', async (req, res) => {
+  try {
+    const result = await User.removeDuplicates();
+    res.json({
+      success: true,
+      message: 'Duplicate users removed',
+      removed: result.removed,
+      remaining: result.remaining
+    });
+  } catch (error) {
+    console.error('Error cleaning up duplicates:', error);
+    res.status(500).json({ error: 'Failed to cleanup duplicates' });
+  }
+});
+
+// FIXED: Socket.io connection handling
 io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
+  console.log('🔌 User connected:', socket.id);
 
   socket.on('authenticate', async (data) => {
     try {
-      const userData = data.user || data;
+      console.log('🔍 Authentication attempt:', data);
+      
+      let userData = data.user || data;
+      
+      if (!userData || !userData.id) {
+        console.error('❌ Invalid user data:', data);
+        socket.emit('error', { message: 'Invalid authentication data' });
+        return;
+      }
+
       const user = await User.findById(userData.id);
       if (!user) {
+        console.error('❌ User not found:', userData.id);
         socket.emit('error', { message: 'User not found' });
         return;
       }
 
-      // Add user to online users
+      console.log('✅ User authenticated:', user.username);
+
+      // FIXED: Remove any existing socket for this user (prevents duplicates)
+      for (const [existingSocketId, existingUser] of onlineUsers.entries()) {
+        if (existingUser.id === user.id && existingSocketId !== socket.id) {
+          console.log('🔄 Removing old socket for user:', user.username);
+          onlineUsers.delete(existingSocketId);
+        }
+      }
+
       onlineUsers.set(socket.id, {
         id: user.id,
         username: user.username,
@@ -444,14 +472,11 @@ io.on('connection', (socket) => {
 
       socket.join('general');
 
-      // Send current online users to all clients
       io.emit('users', getOnlineUsers());
 
-      // Send previous messages to the new user
       const previousMessages = chatRooms.general.messages.slice(-50);
       socket.emit('previousMessages', previousMessages);
 
-      // Notify all clients about new user
       socket.broadcast.emit('userJoined', {
         user: { 
           id: user.id, 
@@ -462,15 +487,13 @@ io.on('connection', (socket) => {
         timestamp: new Date()
       });
 
-      console.log(`${user.username} authenticated and joined chat`);
-      console.log(`Total users online: ${onlineUsers.size}`);
+      console.log(`👥 Total users online: ${onlineUsers.size}`);
     } catch (error) {
-      console.error('Authentication error:', error);
-      socket.emit('error', { message: 'Authentication failed' });
+      console.error('❌ Authentication error:', error);
+      socket.emit('error', { message: 'Authentication failed: ' + error.message });
     }
   });
 
-  // Handle public message sending
   socket.on('sendMessage', (messageData) => {
     try {
       const user = getUserBySocketId(socket.id);
@@ -491,24 +514,18 @@ io.on('connection', (socket) => {
         timestamp: new Date()
       };
 
-      // Add message to room
       chatRooms.general.messages.push(message);
       
-      // Keep only last 100 messages
       if (chatRooms.general.messages.length > 100) {
         chatRooms.general.messages = chatRooms.general.messages.slice(-100);
       }
       
-      // Broadcast to all clients
       io.emit('message', message);
-      
-      console.log(`Public message from ${user.username}: ${message.content}`);
     } catch (error) {
       console.error('Error in sendMessage:', error);
     }
   });
 
-  // Handle PRIVATE message sending
   socket.on('sendPrivateMessage', (data) => {
     try {
       const sender = getUserBySocketId(socket.id);
@@ -519,7 +536,6 @@ io.on('connection', (socket) => {
 
       const { toUserId, message } = data;
       
-      // Find receiver
       const receiverEntry = Array.from(onlineUsers.entries())
         .find(([_, user]) => user.id === toUserId);
       
@@ -547,32 +563,24 @@ io.on('connection', (socket) => {
         type: 'private'
       };
 
-      // Store private message
       const conversationId = getConversationId(sender.id, toUserId);
       if (!privateConversations.has(conversationId)) {
         privateConversations.set(conversationId, []);
       }
       privateConversations.get(conversationId).push(privateMessage);
 
-      // Keep only last 50 messages per conversation
       if (privateConversations.get(conversationId).length > 50) {
         privateConversations.get(conversationId).shift();
       }
 
-      // Send to receiver
       io.to(receiverSocketId).emit('privateMessage', privateMessage);
-      
-      // Also send back to sender
       socket.emit('privateMessage', privateMessage);
-
-      console.log(`Private message from ${sender.username} to ${receiver.username}: ${message}`);
     } catch (error) {
       console.error('Error in sendPrivateMessage:', error);
       socket.emit('error', { message: 'Failed to send private message' });
     }
   });
 
-  // Get conversation history
   socket.on('getConversationHistory', (data) => {
     try {
       const user = getUserBySocketId(socket.id);
@@ -594,7 +602,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Socket Events for Meetings
   socket.on('joinMeeting', async (data) => {
     try {
       const user = getUserBySocketId(socket.id);
@@ -605,10 +612,8 @@ io.on('connection', (socket) => {
 
       const meeting = await Meeting.addParticipant(data.meetingId, user);
       if (meeting) {
-        // Join meeting room
         socket.join(`meeting_${data.meetingId}`);
         
-        // Notify others in meeting
         socket.to(`meeting_${data.meetingId}`).emit('userJoinedMeeting', {
           user,
           meeting
@@ -630,7 +635,6 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // Broadcast to all in meeting room
       io.to(`meeting_${data.meetingId}`).emit('newMeetingMessage', {
         user: user,
         message: data.message,
@@ -641,72 +645,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // In server.js - update the socket authentication handler
-socket.on('authenticate', async (data) => {
-  try {
-    console.log('🔍 Socket authenticate received:', data);
-    
-    // Handle different data structures
-    let userData;
-    if (data.user && data.user.id) {
-      userData = data.user;
-    } else if (data.id) {
-      userData = data;
-    } else {
-      console.error('❌ Invalid authentication data structure:', data);
-      socket.emit('error', { message: 'Invalid authentication data' });
-      return;
-    }
-
-    console.log('🔍 Looking for user with ID:', userData.id);
-    const user = await User.findById(userData.id);
-    
-    if (!user) {
-      console.error('❌ User not found with ID:', userData.id);
-      console.log('❌ Available users:', await User.findAll().then(users => users.map(u => ({ id: u.id, username: u.username }))));
-      socket.emit('error', { message: 'User not found' });
-      return;
-    }
-
-    console.log('✅ User found:', user.username);
-
-    // Add user to online users
-    onlineUsers.set(socket.id, {
-      id: user.id,
-      username: user.username,
-      bio: user.bio,
-      profilePicture: user.profilePicture,
-      socketId: socket.id
-    });
-
-    socket.join('general');
-
-    // Send current online users to all clients
-    io.emit('users', getOnlineUsers());
-
-    // Send previous messages to the new user
-    const previousMessages = chatRooms.general.messages.slice(-50);
-    socket.emit('previousMessages', previousMessages);
-
-    // Notify all clients about new user
-    socket.broadcast.emit('userJoined', {
-      user: { 
-        id: user.id, 
-        username: user.username,
-        profilePicture: user.profilePicture
-      },
-      message: `${user.username} joined the chat`,
-      timestamp: new Date()
-    });
-
-    console.log(`✅ ${user.username} authenticated and joined chat`);
-    console.log(`👥 Total users online: ${onlineUsers.size}`);
-  } catch (error) {
-    console.error('❌ Authentication error:', error);
-    socket.emit('error', { message: 'Authentication failed: ' + error.message });
-  }
-});
-
   socket.on('disconnect', () => {
     try {
       const user = getUserBySocketId(socket.id);
@@ -714,10 +652,8 @@ socket.on('authenticate', async (data) => {
       if (user) {
         onlineUsers.delete(socket.id);
         
-        // Update users list for all clients
         io.emit('users', getOnlineUsers());
         
-        // Notify all clients about user leaving
         io.emit('userLeft', {
           user: { 
             id: user.id, 
@@ -745,4 +681,14 @@ server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
   console.log(`📁 Uploads directory: ${path.join(__dirname, 'uploads')}`);
+  
+  // Start daily match scheduler
+  dailyMatchScheduler = new DailyMatchScheduler(
+    aiService,
+    io,
+    onlineUsers,
+    privateConversations
+  );
+  dailyMatchScheduler.start();
+  console.log('📅 Daily match scheduler started - messages will be sent at 09:00 daily');
 });

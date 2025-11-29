@@ -1242,3 +1242,96 @@ textarea:focus-visible {
   0% { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
 }
+
+/* Add this to your existing App.css - Profile Picture Fixes */
+
+/* Ensure all avatar images are properly styled */
+.user-avatar,
+.message-avatar,
+.profile-avatar {
+  position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+/* Images inside avatars should cover properly */
+.user-avatar img,
+.message-avatar img,
+.profile-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  display: block;
+}
+
+/* Prevent distortion on profile pictures */
+.profile-picture {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  display: block;
+}
+
+/* Fix for small avatars in user list */
+.user-avatar.small {
+  width: 32px;
+  height: 32px;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
+/* Fix for main user avatar in sidebar */
+.current-user .user-avatar {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+}
+
+/* Fix for message avatars */
+.message-avatar {
+  width: 32px;
+  height: 32px;
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+
+/* Fix for profile modal avatar */
+.profile-avatar {
+  width: 80px;
+  height: 80px;
+  font-size: 2rem;
+  flex-shrink: 0;
+}
+
+/* Ensure avatar containers maintain aspect ratio */
+.user-avatar::before,
+.message-avatar::before {
+  content: '';
+  display: block;
+  padding-top: 100%;
+}
+
+.user-avatar > *,
+.message-avatar > * {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* Remove the ::before hack for avatars that already have content */
+.user-avatar:has(img)::before,
+.message-avatar:has(img)::before,
+.user-avatar:not(:empty)::before,
+.message-avatar:not(:empty)::before {
+  display: none;
+}
+
+/* Fallback for browsers that don't support :has() */
+.user-avatar img ~ ::before,
+.message-avatar img ~ ::before {
+  display: none;
+}
