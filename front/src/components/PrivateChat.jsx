@@ -23,7 +23,10 @@ const PrivateChat = ({
         <div className="private-chat-user">
           <div className="user-avatar small">
             {activePrivateChat.profilePicture ? (
-              <img src={activePrivateChat.profilePicture} alt={activePrivateChat.username} />
+              <img 
+                src={`http://localhost:5000/uploads/profile-pictures/${activePrivateChat.profilePicture}`} 
+                alt={activePrivateChat.username}
+              />
             ) : (
               activePrivateChat.username?.charAt(0).toUpperCase()
             )}
@@ -46,21 +49,54 @@ const PrivateChat = ({
             <p>No messages yet. Start a private conversation!</p>
           </div>
         ) : (
-          currentPrivateMessages.map((message) => (
-            <div
-              key={message.id}
-              className={`private-message ${
-                message.from.id === user?.id ? 'own' : 'other'
-              }`}
-            >
-              <div className="private-message-bubble">
-                {message.content}
+          currentPrivateMessages.map((message) => {
+            const isOwnMessage = message.from.id === user?.id;
+            
+            return (
+              <div
+                key={message.id}
+                className={`private-message ${isOwnMessage ? 'own' : 'other'}`}
+              >
+                {/* Avatar for received messages (other person) */}
+                {!isOwnMessage && (
+                  <div className="message-avatar small">
+                    {message.from.profilePicture ? (
+                      <img 
+                        src={`http://localhost:5000/uploads/profile-pictures/${message.from.profilePicture}`} 
+                        alt={message.from.username}
+                      />
+                    ) : (
+                      message.from.username?.charAt(0).toUpperCase()
+                    )}
+                  </div>
+                )}
+                
+                {/* Message content */}
+                <div className="private-message-content">
+                  <div className="private-message-bubble">
+                    {message.content}
+                  </div>
+                  <div className="private-message-time">
+                    {formatTime(message.timestamp)}
+                  </div>
+                </div>
+
+                {/* Avatar for sent messages (current user) */}
+                {isOwnMessage && (
+                  <div className="message-avatar small">
+                    {user.profilePicture ? (
+                      <img 
+                        src={`http://localhost:5000/uploads/profile-pictures/${user.profilePicture}`} 
+                        alt={user.username}
+                      />
+                    ) : (
+                      user.username?.charAt(0).toUpperCase()
+                    )}
+                  </div>
+                )}
               </div>
-              <div className="private-message-time">
-                {formatTime(message.timestamp)}
-              </div>
-            </div>
-          ))
+            );
+          })
         )}
         <div ref={privateMessagesEndRef} />
       </div>

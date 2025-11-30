@@ -547,7 +547,59 @@ body {
 .close-chat-btn:hover {
   background: #4a5568;
 }
+/* FIX: Improved private message layout */
+.private-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+}
 
+.private-message.own {
+  justify-content: flex-end;
+}
+
+.private-message.other {
+  justify-content: flex-start;
+}
+
+.private-message-content {
+  display: flex;
+  flex-direction: column;
+  max-width: 70%;
+}
+
+.private-message.own .private-message-content {
+  align-items: flex-end;
+}
+
+.private-message.other .private-message-content {
+  align-items: flex-start;
+}
+
+.private-message-bubble {
+  padding: 8px 12px;
+  border-radius: 12px;
+  word-wrap: break-word;
+  line-height: 1.4;
+}
+
+.private-message.own .private-message-bubble {
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: white;
+}
+
+.private-message.other .private-message-bubble {
+  background: white;
+  color: #2d3748;
+  border: 1px solid #e2e8f0;
+}
+
+.private-message-time {
+  font-size: 0.7rem;
+  color: #a0aec0;
+  margin-top: 4px;
+}
 .private-messages {
   flex: 1;
   padding: 16px;

@@ -30,7 +30,8 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 const io = socketIo(server, {
   cors: {
     origin: "http://localhost:3000",
-    methods: ["GET", "POST"]
+    methods: ["GET", "POST"],
+    credentials: true
   }
 });
 
@@ -275,7 +276,6 @@ app.delete('/api/profile-picture', authenticate, async (req, res) => {
 });
 
 // AI Matching Endpoint
-// AI Matching Endpoint - TEMPORARY FIX
 app.post('/api/match-users', authenticate, async (req, res) => {
   try {
     const allUsers = await User.findAll();
@@ -289,17 +289,13 @@ app.post('/api/match-users', authenticate, async (req, res) => {
     
     const matches = await aiService.analyzeProfilesAndMatch(req.user, otherUsers);
     
-    // FIX: Ensure we return proper matches array
     let matchResults = matches.matches || matches || [];
     
-    // FIX: Filter out any invalid matches and ensure user IDs are correct
     matchResults = matchResults
       .filter(match => match && match.userId && match.username)
       .map(match => {
-        // Ensure the user exists
         const userExists = otherUsers.find(u => u.id === match.userId);
         if (!userExists) {
-          // Find user by username if ID doesn't match
           const userByUsername = otherUsers.find(u => u.username === match.username);
           if (userByUsername) {
             return { ...match, userId: userByUsername.id };
@@ -307,7 +303,7 @@ app.post('/api/match-users', authenticate, async (req, res) => {
         }
         return match;
       })
-      .filter(match => match.userId !== req.user.id); // Double-check no self-matches
+      .filter(match => match.userId !== req.user.id);
     
     console.log(`✅ Found ${matchResults.length} matches for ${req.user.username}`);
     
@@ -315,21 +311,21 @@ app.post('/api/match-users', authenticate, async (req, res) => {
   } catch (error) {
     console.error('Matching error:', error);
     
-    // FALLBACK: Return manual matches if AI fails
     const allUsers = await User.findAll();
     const otherUsers = allUsers.filter(u => u.id !== req.user.id);
     
     const fallbackMatches = otherUsers.slice(0, 3).map(user => ({
       username: user.username,
       userId: user.id,
-      score: Math.floor(Math.random() * 3) + 7, // 7-10 score
+      score: Math.floor(Math.random() * 3) + 7,
       reasoning: "Great match based on shared interests and compatibility"
     }));
     
     res.json(fallbackMatches);
   }
 });
-// FIXED: Icebreaker Endpoint
+
+// Icebreaker Endpoint
 app.post('/api/send-icebreaker', authenticate, async (req, res) => {
   try {
     const { toUserId } = req.body;
@@ -341,7 +337,6 @@ app.post('/api/send-icebreaker', authenticate, async (req, res) => {
 
     const icebreaker = await aiService.generateIcebreaker(req.user, targetUser);
     
-    // Send the message via socket
     const receiverEntry = Array.from(onlineUsers.entries())
       .find(([_, user]) => user.id === toUserId);
     
@@ -447,7 +442,6 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Manual trigger endpoint for daily matches (for testing)
 app.post('/api/trigger-daily-matches', authenticate, async (req, res) => {
   try {
     if (dailyMatchScheduler) {
@@ -462,7 +456,6 @@ app.post('/api/trigger-daily-matches', authenticate, async (req, res) => {
   }
 });
 
-// Cleanup duplicate users endpoint
 app.post('/api/cleanup-duplicates', async (req, res) => {
   try {
     const result = await User.removeDuplicates();
@@ -478,71 +471,77 @@ app.post('/api/cleanup-duplicates', async (req, res) => {
   }
 });
 
-// FIXED: Socket.io connection handling - Allow multiple tabs
+// FIX: Improved Socket.io connection handling
 io.on('connection', (socket) => {
   console.log('🔌 User connected:', socket.id);
+  
+  // Store original room for this socket
+  let userRoom = 'general';
 
- socket.on('authenticate', async (data) => {
-  try {
-    console.log('🔍 Authentication attempt:', data);
-    
-    let userData = data.user || data;
-    
-    if (!userData || !userData.id) {
-      console.error('❌ Invalid user data:', data);
-      socket.emit('error', { message: 'Invalid authentication data' });
-      return;
-    }
+  socket.on('authenticate', async (data) => {
+    try {
+      console.log('🔍 Authentication attempt:', data);
+      
+      let userData = data.user || data;
+      
+      if (!userData || !userData.id) {
+        console.error('❌ Invalid user data:', data);
+        socket.emit('error', { message: 'Invalid authentication data' });
+        return;
+      }
 
-    const user = await User.findById(userData.id);
-    if (!user) {
-      console.error('❌ User not found:', userData.id);
-      socket.emit('error', { message: 'User not found' });
-      return;
-    }
+      // FIX: Always fetch fresh user data from database
+      const user = await User.findById(userData.id);
+      if (!user) {
+        console.error('❌ User not found:', userData.id);
+        socket.emit('error', { message: 'User not found' });
+        return;
+      }
 
-    console.log('✅ User authenticated:', user.username);
+      console.log('✅ User authenticated:', user.username);
 
-    // FIXED: Allow multiple sockets per user without removing old ones
-    onlineUsers.set(socket.id, {
-      id: user.id,
-      username: user.username,
-      bio: user.bio,
-      profilePicture: user.profilePicture,
-      socketId: socket.id
-    });
-
-    // Always keep user in general room
-    socket.join('general');
-
-    io.emit('users', getOnlineUsers());
-
-    const previousMessages = chatRooms.general.messages.slice(-50);
-    socket.emit('previousMessages', previousMessages);
-
-    // Only notify if this is the first connection for this user
-    const userConnections = Array.from(onlineUsers.values())
-      .filter(u => u.id === user.id);
-    
-    if (userConnections.length === 1) {
-      socket.broadcast.emit('userJoined', {
-        user: { 
-          id: user.id, 
-          username: user.username,
-          profilePicture: user.profilePicture
-        },
-        message: `${user.username} joined the chat`,
-        timestamp: new Date()
+      // Store user with socket
+      onlineUsers.set(socket.id, {
+        id: user.id,
+        username: user.username,
+        bio: user.bio,
+        profilePicture: user.profilePicture,
+        socketId: socket.id
       });
-    }
 
-    console.log(`👥 User ${user.username} connected (socket: ${socket.id})`);
-    console.log(`👥 Total connections: ${onlineUsers.size}, Unique users: ${new Set(Array.from(onlineUsers.values()).map(u => u.id)).size}`);
-  } catch (error) {
-    console.error('❌ Authentication error:', error);
-    socket.emit('error', { message: 'Authentication failed: ' + error.message });
-  }
-});
+      // Always join general room
+      socket.join('general');
+      userRoom = 'general';
+
+      // Emit updated users list
+      io.emit('users', getOnlineUsers());
+
+      // Send previous messages
+      const previousMessages = chatRooms.general.messages.slice(-50);
+      socket.emit('previousMessages', previousMessages);
+
+      // Only notify if this is the first connection for this user
+      const userConnections = Array.from(onlineUsers.values())
+        .filter(u => u.id === user.id);
+      
+      if (userConnections.length === 1) {
+        socket.broadcast.emit('userJoined', {
+          user: { 
+            id: user.id, 
+            username: user.username,
+            profilePicture: user.profilePicture
+          },
+          message: `${user.username} joined the chat`,
+          timestamp: new Date()
+        });
+      }
+
+      console.log(`👥 User ${user.username} connected (socket: ${socket.id})`);
+    } catch (error) {
+      console.error('❌ Authentication error:', error);
+      socket.emit('error', { message: 'Authentication failed: ' + error.message });
+    }
+  });
 
   socket.on('sendMessage', (messageData) => {
     try {
@@ -554,7 +553,7 @@ io.on('connection', (socket) => {
 
       const message = {
         ...messageData,
-        id: Date.now().toString() + '-' + Math.random().toString(36).substr(2, 9), // FIXED: Unique ID
+        id: Date.now().toString() + '-' + Math.random().toString(36).substr(2, 9),
         userId: user.id,
         username: user.username,
         user: {
@@ -571,7 +570,7 @@ io.on('connection', (socket) => {
         chatRooms.general.messages = chatRooms.general.messages.slice(-100);
       }
       
-      io.emit('message', message);
+      io.to('general').emit('message', message);
     } catch (error) {
       console.error('Error in sendMessage:', error);
     }
@@ -598,7 +597,7 @@ io.on('connection', (socket) => {
       const [receiverSocketId, receiver] = receiverEntry;
 
       const privateMessage = {
-        id: Date.now().toString() + '-' + Math.random().toString(36).substr(2, 9), // FIXED: Unique ID
+        id: Date.now().toString() + '-' + Math.random().toString(36).substr(2, 9),
         from: { 
           id: sender.id, 
           username: sender.username,
@@ -653,36 +652,35 @@ io.on('connection', (socket) => {
     }
   });
 
-socket.on('joinMeeting', async (data) => {
-  try {
-    const user = getUserBySocketId(socket.id);
-    if (!user) {
-      socket.emit('error', { message: 'Not authenticated' });
-      return;
-    }
+  // FIX: Improved meeting join - doesn't interfere with general chat
+  socket.on('joinMeeting', async (data) => {
+    try {
+      const user = getUserBySocketId(socket.id);
+      if (!user) {
+        socket.emit('error', { message: 'Not authenticated' });
+        return;
+      }
 
-    console.log(`📅 ${user.username} joining meeting: ${data.meetingId}`);
-    
-    const meeting = await Meeting.addParticipant(data.meetingId, user);
-    if (meeting) {
-      socket.join(`meeting_${data.meetingId}`);
+      console.log(`📅 ${user.username} joining meeting: ${data.meetingId}`);
       
-      // Only notify other users in the meeting, don't affect global authentication
-      socket.to(`meeting_${data.meetingId}`).emit('userJoinedMeeting', {
-        user,
-        meeting
-      });
+      const meeting = await Meeting.addParticipant(data.meetingId, user);
+      if (meeting) {
+        // Join meeting room WITHOUT leaving general
+        socket.join(`meeting_${data.meetingId}`);
+        
+        // Notify other meeting participants
+        socket.to(`meeting_${data.meetingId}`).emit('userJoinedMeeting', {
+          user,
+          meeting
+        });
 
-      console.log(`✅ ${user.username} joined meeting: ${meeting.title}`);
-      
-      // Keep the user in the main chat room and online users list
-      socket.join('general');
+        console.log(`✅ ${user.username} joined meeting: ${meeting.title}`);
+      }
+    } catch (error) {
+      console.error('Join meeting error:', error);
+      socket.emit('error', { message: 'Failed to join meeting' });
     }
-  } catch (error) {
-    console.error('Join meeting error:', error);
-    socket.emit('error', { message: 'Failed to join meeting' });
-  }
-});
+  });
 
   socket.on('meetingMessage', (data) => {
     try {
@@ -745,7 +743,6 @@ server.listen(PORT, () => {
   console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
   console.log(`📁 Uploads directory: ${path.join(__dirname, 'uploads')}`);
   
-  // Start daily match scheduler
   dailyMatchScheduler = new DailyMatchScheduler(
     aiService,
     io,
