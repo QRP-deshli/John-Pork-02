@@ -34,7 +34,7 @@ const Sidebar = ({
           )}
         </div>
         <div className="user-info">
-          <span className="username">{user?.username}</span>
+          <span className="username">{user?.username}</span><br />
           <span className="status">Online</span>
         </div>
         <div className="user-actions">

@@ -41,9 +41,14 @@ const Meetings = ({ user, socket }) => {
   };
 
   const joinMeeting = (meetingId) => {
+  if (socket && user) {
+    console.log('Joining meeting:', meetingId);
     socket.emit('joinMeeting', { meetingId });
-    alert(`Joined meeting! Check browser console for meeting room messages.`);
-  };
+    alert(`Joined meeting! You can now chat in the meeting room.`);
+  } else {
+    alert('Please wait for connection...');
+  }
+};
 
   const formatTime = (timestamp) => {
     return new Date(timestamp).toLocaleString();

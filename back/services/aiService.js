@@ -14,7 +14,7 @@ class AIService {
       Other Users:
       ${allUsers.map(user => `- ${user.username}: "${user.bio || 'No bio'}"`).join('\n')}
       
-      Return JSON: {matches: [{username: "name", userId: "id", score: 8, reasoning: "why they match"}]}
+      Return JSON: {matches: [{username: "name", userId: "id", score: 8, reasoning: "why they match (with key words why they match)"}]}
     `;
 
     try {

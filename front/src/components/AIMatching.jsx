@@ -77,7 +77,7 @@ const AIMatching = ({ user, users }) => {
           {matches.map((match, index) => (
             <div key={match.userId || `match-${index}-${Date.now()}`} className="match-card">
               <div className="match-header">
-                <strong>{match.username}</strong>
+                <strong>{match.username}</strong><br />
                 <span className="match-score">Score: {match.score}/10</span>
               </div>
               <p className="match-reason">{match.reasoning}</p>

@@ -482,67 +482,67 @@ app.post('/api/cleanup-duplicates', async (req, res) => {
 io.on('connection', (socket) => {
   console.log('🔌 User connected:', socket.id);
 
-  socket.on('authenticate', async (data) => {
-    try {
-      console.log('🔍 Authentication attempt:', data);
-      
-      let userData = data.user || data;
-      
-      if (!userData || !userData.id) {
-        console.error('❌ Invalid user data:', data);
-        socket.emit('error', { message: 'Invalid authentication data' });
-        return;
-      }
-
-      const user = await User.findById(userData.id);
-      if (!user) {
-        console.error('❌ User not found:', userData.id);
-        socket.emit('error', { message: 'User not found' });
-        return;
-      }
-
-      console.log('✅ User authenticated:', user.username);
-
-      // FIXED: Allow multiple sockets per user (for multiple tabs)
-      onlineUsers.set(socket.id, {
-        id: user.id,
-        username: user.username,
-        bio: user.bio,
-        profilePicture: user.profilePicture,
-        socketId: socket.id
-      });
-
-      socket.join('general');
-      socket.join(`user_${user.id}`);
-
-      io.emit('users', getOnlineUsers());
-
-      const previousMessages = chatRooms.general.messages.slice(-50);
-      socket.emit('previousMessages', previousMessages);
-
-      // Only notify if this is the first connection for this user
-      const userConnections = Array.from(onlineUsers.values())
-        .filter(u => u.id === user.id);
-      
-      if (userConnections.length === 1) {
-        socket.broadcast.emit('userJoined', {
-          user: { 
-            id: user.id, 
-            username: user.username,
-            profilePicture: user.profilePicture
-          },
-          message: `${user.username} joined the chat`,
-          timestamp: new Date()
-        });
-      }
-
-      console.log(`👥 User ${user.username} connected (socket: ${socket.id})`);
-      console.log(`👥 Total connections: ${onlineUsers.size}, Unique users: ${new Set(Array.from(onlineUsers.values()).map(u => u.id)).size}`);
-    } catch (error) {
-      console.error('❌ Authentication error:', error);
-      socket.emit('error', { message: 'Authentication failed: ' + error.message });
+ socket.on('authenticate', async (data) => {
+  try {
+    console.log('🔍 Authentication attempt:', data);
+    
+    let userData = data.user || data;
+    
+    if (!userData || !userData.id) {
+      console.error('❌ Invalid user data:', data);
+      socket.emit('error', { message: 'Invalid authentication data' });
+      return;
     }
-  });
+
+    const user = await User.findById(userData.id);
+    if (!user) {
+      console.error('❌ User not found:', userData.id);
+      socket.emit('error', { message: 'User not found' });
+      return;
+    }
+
+    console.log('✅ User authenticated:', user.username);
+
+    // FIXED: Allow multiple sockets per user without removing old ones
+    onlineUsers.set(socket.id, {
+      id: user.id,
+      username: user.username,
+      bio: user.bio,
+      profilePicture: user.profilePicture,
+      socketId: socket.id
+    });
+
+    // Always keep user in general room
+    socket.join('general');
+
+    io.emit('users', getOnlineUsers());
+
+    const previousMessages = chatRooms.general.messages.slice(-50);
+    socket.emit('previousMessages', previousMessages);
+
+    // Only notify if this is the first connection for this user
+    const userConnections = Array.from(onlineUsers.values())
+      .filter(u => u.id === user.id);
+    
+    if (userConnections.length === 1) {
+      socket.broadcast.emit('userJoined', {
+        user: { 
+          id: user.id, 
+          username: user.username,
+          profilePicture: user.profilePicture
+        },
+        message: `${user.username} joined the chat`,
+        timestamp: new Date()
+      });
+    }
+
+    console.log(`👥 User ${user.username} connected (socket: ${socket.id})`);
+    console.log(`👥 Total connections: ${onlineUsers.size}, Unique users: ${new Set(Array.from(onlineUsers.values()).map(u => u.id)).size}`);
+  } catch (error) {
+    console.error('❌ Authentication error:', error);
+    socket.emit('error', { message: 'Authentication failed: ' + error.message });
+  }
+});
 
   socket.on('sendMessage', (messageData) => {
     try {
@@ -653,30 +653,36 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('joinMeeting', async (data) => {
-    try {
-      const user = getUserBySocketId(socket.id);
-      if (!user) {
-        socket.emit('error', { message: 'Not authenticated' });
-        return;
-      }
-
-      const meeting = await Meeting.addParticipant(data.meetingId, user);
-      if (meeting) {
-        socket.join(`meeting_${data.meetingId}`);
-        
-        socket.to(`meeting_${data.meetingId}`).emit('userJoinedMeeting', {
-          user,
-          meeting
-        });
-
-        console.log(`${user.username} joined meeting: ${meeting.title}`);
-      }
-    } catch (error) {
-      console.error('Join meeting error:', error);
-      socket.emit('error', { message: 'Failed to join meeting' });
+socket.on('joinMeeting', async (data) => {
+  try {
+    const user = getUserBySocketId(socket.id);
+    if (!user) {
+      socket.emit('error', { message: 'Not authenticated' });
+      return;
     }
-  });
+
+    console.log(`📅 ${user.username} joining meeting: ${data.meetingId}`);
+    
+    const meeting = await Meeting.addParticipant(data.meetingId, user);
+    if (meeting) {
+      socket.join(`meeting_${data.meetingId}`);
+      
+      // Only notify other users in the meeting, don't affect global authentication
+      socket.to(`meeting_${data.meetingId}`).emit('userJoinedMeeting', {
+        user,
+        meeting
+      });
+
+      console.log(`✅ ${user.username} joined meeting: ${meeting.title}`);
+      
+      // Keep the user in the main chat room and online users list
+      socket.join('general');
+    }
+  } catch (error) {
+    console.error('Join meeting error:', error);
+    socket.emit('error', { message: 'Failed to join meeting' });
+  }
+});
 
   socket.on('meetingMessage', (data) => {
     try {

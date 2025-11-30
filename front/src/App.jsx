@@ -43,6 +43,25 @@ const App = () => {
     scrollPrivateToBottom();
   }, [privateMessages]);
 
+  // Add this function to refresh user data
+  const refreshUserData = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+      
+      const response = await axios.get('http://localhost:5000/api/profile', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      const updatedUser = response.data;
+      setUser(updatedUser);
+      localStorage.setItem('user', JSON.stringify(updatedUser));
+      console.log('✅ User data refreshed');
+    } catch (error) {
+      console.error('Failed to refresh user data:', error);
+    }
+  };
+
   // Check for existing token on app load
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -60,6 +79,18 @@ const App = () => {
       }
     }
   }, []);
+
+  // Add auto-refresh on window focus
+  useEffect(() => {
+    const handleFocus = () => {
+      if (user) {
+        refreshUserData();
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [user]);
 
 const initializeSocketAndAuthenticate = (userData, token) => {
   setIsAuthenticating(true);
@@ -83,9 +114,13 @@ const initializeSocketAndAuthenticate = (userData, token) => {
   newSocket.once('connect', () => {
     console.log('✅ Socket connected, authenticating...');
     
-    newSocket.emit('authenticate', { 
-      user: userData, 
-      token: token 
+    // Refresh user data before authenticating
+    refreshUserData().then(() => {
+      const currentUser = JSON.parse(localStorage.getItem('user'));
+      newSocket.emit('authenticate', { 
+        user: currentUser || userData, 
+        token: token 
+      });
     });
   });
 
@@ -174,17 +209,20 @@ const initializeSocketAndAuthenticate = (userData, token) => {
     
     if (error.message.includes('Authentication failed') || error.message.includes('User not found')) {
       console.warn('Authentication issue:', error.message);
-      const storedUser = localStorage.getItem('user');
-      const storedToken = localStorage.getItem('token');
-      
-      if (storedUser && storedToken) {
-        setTimeout(() => {
-          newSocket.emit('authenticate', { 
-            user: JSON.parse(storedUser), 
-            token: storedToken 
-          });
-        }, 2000);
-      }
+      // Try to refresh user data and reauthenticate
+      refreshUserData().then(() => {
+        const storedUser = localStorage.getItem('user');
+        const storedToken = localStorage.getItem('token');
+        
+        if (storedUser && storedToken) {
+          setTimeout(() => {
+            newSocket.emit('authenticate', { 
+              user: JSON.parse(storedUser), 
+              token: storedToken 
+            });
+          }, 2000);
+        }
+      });
     } else {
       alert(`Error: ${error.message}`);
     }
@@ -308,6 +346,21 @@ const sendMessage = (e) => {
     });
   };
 
+  // Add manual refresh function
+  const handleManualRefresh = () => {
+    refreshUserData();
+    if (socket) {
+      const token = localStorage.getItem('token');
+      const userData = JSON.parse(localStorage.getItem('user'));
+      if (token && userData) {
+        socket.emit('authenticate', { 
+          user: userData, 
+          token: token 
+        });
+      }
+    }
+  };
+
   // Render content based on active tab
   const renderTabContent = () => {
     switch (activeTab) {
@@ -359,6 +412,20 @@ const sendMessage = (e) => {
         <div className="auth-card">
           <h2>Connecting...</h2>
           <p>Please wait while we connect you to the chat.</p>
+          <button 
+            onClick={handleManualRefresh}
+            style={{
+              background: '#667eea',
+              color: 'white',
+              border: 'none',
+              padding: '10px 20px',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              marginTop: '10px'
+            }}
+          >
+            Refresh Connection
+          </button>
           <div style={{ textAlign: 'center', marginTop: '20px' }}>
             <div className="loading-spinner"></div>
           </div>
@@ -381,6 +448,7 @@ const sendMessage = (e) => {
         onShowProfile={() => setShowProfile(true)}
         onLogout={handleLogout}
         onStartPrivateChat={startPrivateChat}
+        onManualRefresh={handleManualRefresh} // Pass refresh function to sidebar
       />
 
       <div className="main-content">
@@ -403,6 +471,23 @@ const sendMessage = (e) => {
             onClick={() => setActiveTab('meetings')}
           >
             Meetings
+          </button>
+          <button 
+            className="refresh-button"
+            onClick={handleManualRefresh}
+            title="Refresh Connection"
+            style={{
+              marginLeft: 'auto',
+              background: '#48bb78',
+              color: 'white',
+              border: 'none',
+              padding: '8px 12px',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '12px'
+            }}
+          >
+            Refresh
           </button>
         </div>
 
